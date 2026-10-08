@@ -1,0 +1,26 @@
+{
+  "name": "integra360-ticketera-backend",
+  "version": "1.0.0",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "migrate": "node database/migrate.js",
+    "seed": "node database/seed.js",
+    "db:reset": "node database/migrate.js --fresh && node database/seed.js"
+  },
+  "dependencies": {
+    "baileys": "^7.0.0-rc14",
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.1",
+    "jsonwebtoken": "^9.0.2",
+    "libphonenumber-js": "^1.13.14",
+    "multer": "^2.4.0",
+    "mysql2": "^3.11.3",
+    "pino": "^9.14.0",
+    "qrcode": "^1.5.4",
+    "sharp": "^0.35.4"
+  }
+}

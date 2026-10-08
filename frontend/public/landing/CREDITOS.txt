@@ -1,0 +1,5 @@
+Fotos de Unsplash (https://unsplash.com/license), servidas localmente:
+boliches.webp      photo-1566737236500-c8ac43014a67
+fiestas.webp       photo-1492684223066-81342ee5ff30
+teatros.webp       photo-1503095396549-807759245b35
+restaurantes.webp  photo-1414235077428-338989a2e8c0

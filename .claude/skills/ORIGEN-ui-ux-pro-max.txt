@@ -1,0 +1,4 @@
+Origen: https://github.com/nextlevelbuilder/ui-ux-pro-max-skill (commit 477bcb2)
+Instaladas: 2026-10-06
+Skills: banner-design, brand, design, design-system, slides, ui-styling, ui-ux-pro-max
+Adaptación local: en ui-ux-pro-max/SKILL.md las rutas "${CLAUDE_PLUGIN_ROOT}/.claude/skills/ui-ux-pro-max/" se cambiaron por ".claude/skills/ui-ux-pro-max/" (instalación por proyecto, no como plugin).

@@ -1,0 +1,96 @@
+@import "tailwindcss";
+
+/* dark: se activa con la clase .dark en <html> (la maneja TemaContext), no sólo por el sistema */
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  /* Geist en todo el sitio (autoalojada con @fontsource-variable/geist) */
+  --font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+  /* Curvas de movimiento: ease-out fuerte para UI, ease-in-out para desplazamientos en pantalla */
+  --ease-salida: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-desplazar: cubic-bezier(0.77, 0, 0.175, 1);
+}
+
+/*
+ * Sistema de formas (una sola regla en todo el proyecto):
+ *   botones = píldora · campos = radius 12px · tarjetas = radius 16px (24px en piezas destacadas)
+ * Superficies: zinc-50 / zinc-950 de fondo, blanco / zinc-900 para tarjetas, bordes con anillos translúcidos.
+ */
+@layer base {
+  html {
+    scroll-behavior: smooth;
+    -webkit-tap-highlight-color: transparent;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto;
+    }
+  }
+  body {
+    @apply bg-zinc-50 text-zinc-900 antialiased dark:bg-zinc-950 dark:text-zinc-100;
+  }
+  h1, h2, h3 {
+    text-wrap: balance;
+  }
+  p {
+    text-wrap: pretty;
+  }
+  :focus-visible {
+    @apply outline-2 outline-offset-2 outline-indigo-500;
+  }
+  ::selection {
+    @apply bg-indigo-500/25;
+  }
+}
+
+@utility btn {
+  @apply inline-flex cursor-pointer items-center justify-center gap-2 rounded-full px-4 py-2 text-sm font-medium whitespace-nowrap select-none
+    transition-[transform,background-color,color,box-shadow] duration-150 ease-out active:scale-[0.97]
+    disabled:pointer-events-none disabled:opacity-50;
+}
+@utility btn-primary {
+  @apply btn bg-indigo-600 text-white shadow-[0_8px_24px_-12px_rgb(79_70_229/0.7)] hover:bg-indigo-500;
+}
+@utility btn-secondary {
+  @apply btn bg-white text-zinc-800 ring-1 ring-zinc-900/10 hover:bg-zinc-100
+    dark:bg-white/5 dark:text-zinc-100 dark:ring-white/15 dark:hover:bg-white/10;
+}
+@utility btn-danger {
+  @apply btn bg-rose-600 text-white hover:bg-rose-500;
+}
+@utility input {
+  @apply w-full rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 placeholder:text-zinc-400
+    transition-[border-color,box-shadow] duration-150 ease-out
+    focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/15 focus:outline-hidden
+    disabled:opacity-60
+    dark:border-white/15 dark:bg-zinc-900 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:scheme-dark;
+}
+@utility label {
+  @apply mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300;
+}
+@utility card {
+  @apply rounded-2xl bg-white p-5 ring-1 ring-zinc-900/5 shadow-[0_1px_2px_rgb(24_24_27/0.04),0_8px_24px_-12px_rgb(24_24_27/0.08)]
+    dark:bg-zinc-900 dark:ring-white/10 dark:shadow-none;
+}
+/* Tablas de los paneles */
+@utility tabla {
+  @apply w-full text-sm tabular-nums
+    [&_thead]:bg-zinc-50 [&_thead]:text-left [&_thead]:text-xs [&_thead]:font-medium [&_thead]:text-zinc-500
+    dark:[&_thead]:bg-white/5 dark:[&_thead]:text-zinc-400
+    [&_tbody_tr]:transition-colors [&_tbody_tr]:duration-150 [&_tbody_tr:hover]:bg-zinc-50/70 dark:[&_tbody_tr:hover]:bg-white/3;
+}
+
+/* Inicio: inclinación 3D de las categorías, sólo con puntero fino y sin movimiento reducido */
+@media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference) {
+  .categoria:hover {
+    transform: translateY(-6px) rotateX(4deg);
+    box-shadow: 0 30px 80px -30px rgb(79 70 229 / 0.55);
+  }
+}
+
+/* Brillo que recorre los skeletons de carga */
+@keyframes brillo {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(100%); }
+}
