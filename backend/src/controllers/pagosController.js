@@ -21,6 +21,8 @@ exports.webhookMercadoPago = asyncHandler(async (req, res) => {
     const resultado = await procesarPagoMercadoPago(req.ambitoMercadoPago, String(dataId));
     res.status(200).json(resultado);
   } catch (err) {
+    // Pago inexistente en esa cuenta (ej. «Simular notificación» de MercadoPago): no tiene sentido reintentar
+    if (err.status === 404) return res.status(200).json({ ignorado: 'El pago no existe en la cuenta de MercadoPago' });
     console.error('[mercadopago] webhook', err.message);
     res.status(500).json({ error: 'No se pudo procesar la notificación' });
   }

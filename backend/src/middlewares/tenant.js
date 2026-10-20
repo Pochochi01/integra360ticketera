@@ -4,18 +4,21 @@ const Portero = require('../models/Portero');
 const { verificarToken, requiereRol, exigirRol } = require('./auth');
 const { AppError } = require('../utils/errors');
 
-const DOMINIOS_BASE = (process.env.TENANT_BASE_DOMAINS || 'localhost').split(',').map((d) => d.trim().toLowerCase());
+const lista = (valor) => valor.split(',').map((d) => d.trim().toLowerCase()).filter(Boolean);
+const DOMINIOS_BASE = lista(process.env.TENANT_BASE_DOMAINS || 'localhost');
+// Subdominios de la propia plataforma: nunca son un complejo (ej. api.midominio.com es el backend)
+const RESERVADOS = new Set(lista(process.env.TENANT_SUBDOMINIOS_RESERVADOS || 'www,api,app,admin'));
 
 /**
  * Extrae el slug del tenant del subdominio: "norte.integra360.com" → "norte",
- * "norte.localhost" → "norte". Ignora "www" y los hosts sin subdominio.
+ * "norte.localhost" → "norte". Ignora los subdominios reservados (www, api…) y los hosts sin subdominio.
  */
 const slugDesdeHost = (host = '') => {
   const nombre = host.split(':')[0].toLowerCase();
   for (const base of DOMINIOS_BASE) {
     if (nombre.endsWith(`.${base}`)) {
       const sub = nombre.slice(0, -(base.length + 1)).split('.').pop();
-      return sub && sub !== 'www' ? sub : null;
+      return sub && !RESERVADOS.has(sub) ? sub : null;
     }
   }
   return null;
