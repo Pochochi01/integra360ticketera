@@ -38,5 +38,14 @@ const apagar = async (senal) => {
 process.on('SIGINT', () => apagar('SIGINT'));
 process.on('SIGTERM', () => apagar('SIGTERM'));
 
+// Renueva los access tokens de MercadoPago que vencen pronto (al iniciar y cada 6 horas)
+const { renovarPorVencer } = require('./services/mercadopagoTokens');
+const renovarMercadoPago = () =>
+  renovarPorVencer()
+    .then((r) => (r.renovados || r.requierenReconexion || r.errores) && console.log('[mercadopago] renovación de tokens', r))
+    .catch((e) => console.error('[mercadopago] renovación', e.message));
+setTimeout(renovarMercadoPago, 10 * 1000);
+setInterval(renovarMercadoPago, 6 * 60 * 60 * 1000);
+
 // Libera el stock de ventas pendientes vencidas cada minuto
 setInterval(() => expirarPendientes().catch((e) => console.error('[expirar]', e.message)), 60 * 1000);

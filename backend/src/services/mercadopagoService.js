@@ -3,6 +3,7 @@ const crypto = require('crypto');
 /**
  * Cliente mínimo de la API REST de MercadoPago (Checkout Pro).
  * Recibe siempre las credenciales explícitamente: cada tenant cobra con su cuenta y la plataforma con la suya.
+ * Los access tokens vienen de OAuth (services/mercadopagoTokens.js los mantiene vigentes).
  * MERCADOPAGO_API_URL permite apuntar a un mock en pruebas.
  */
 const API = () => (process.env.MERCADOPAGO_API_URL || 'https://api.mercadopago.com').replace(/\/$/, '');
@@ -26,8 +27,30 @@ const llamar = async (accessToken, metodo, ruta, body, extraHeaders = {}) => {
   return data;
 };
 
-/** Verifica un access token y devuelve los datos de la cuenta (id = collector_id). */
-const verificarCredenciales = (accessToken) => llamar(accessToken, 'GET', '/users/me');
+/** Datos de la cuenta dueña del token (id = collector, email = correo vinculado). */
+const cuentaDelToken = (accessToken) => llamar(accessToken, 'GET', '/users/me');
+
+/**
+ * POST /oauth/token (sin Authorization: se autentica con client_id + client_secret en el cuerpo).
+ * Sirve para canjear el código de autorización y para renovar con el refresh token.
+ * Respuesta: { access_token, token_type, expires_in, scope, user_id, refresh_token, public_key, live_mode }
+ */
+const oauthToken = async (cuerpo) => {
+  const res = await fetch(`${API()}/oauth/token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify(cuerpo),
+  });
+  const texto = await res.text();
+  let data = {};
+  try { data = texto ? JSON.parse(texto) : {}; } catch { /* respuesta no JSON */ }
+  if (!res.ok || !data.access_token) {
+    const err = new MercadoPagoError(res.status, data.message || data.error_description || data.error || `MercadoPago respondió ${res.status}`);
+    err.codigo = data.error; // ej. invalid_grant (refresh token revocado o vencido)
+    throw err;
+  }
+  return data;
+};
 
 /**
  * Crea una preferencia de Checkout Pro.
@@ -77,4 +100,4 @@ const firmaValida = (secret, headers, dataId) => {
 const ESTADOS = { approved: 'aprobado', authorized: 'pendiente', in_process: 'pendiente', pending: 'pendiente', in_mediation: 'pendiente', rejected: 'rechazado', cancelled: 'cancelado', refunded: 'reembolsado', charged_back: 'reembolsado' };
 const mapearEstado = (status) => ESTADOS[status] || 'pendiente';
 
-module.exports = { verificarCredenciales, crearPreferencia, obtenerPago, reembolsar, firmaValida, mapearEstado, MercadoPagoError };
+module.exports = { cuentaDelToken, oauthToken, crearPreferencia, obtenerPago, reembolsar, firmaValida, mapearEstado, MercadoPagoError };

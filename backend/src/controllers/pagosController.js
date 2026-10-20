@@ -4,7 +4,8 @@ const { asyncHandler } = require('../utils/errors');
 
 /**
  * POST /pagos/webhook/mercadopago/:ambito   (ambito = id_tenant | "plataforma")
- * Notificación de MercadoPago. req.mercadopago lo carga el middleware según el ámbito.
+ * Notificación de MercadoPago. La firma se valida con la clave secreta de la aplicación (MP_WEBHOOK_SECRET:
+ * es única, porque todas las cuentas se vinculan a la misma app por OAuth).
  * Nunca confía en el cuerpo: vuelve a consultar el pago con las credenciales de ese ámbito.
  * Responde 200 a lo que no es un pago (merchant_order, etc.) y 500 ante errores para que MercadoPago reintente.
  */
@@ -13,7 +14,7 @@ exports.webhookMercadoPago = asyncHandler(async (req, res) => {
   const dataId = req.query['data.id'] || req.body?.data?.id || (tipo === 'payment' ? req.query.id : null);
   if (tipo !== 'payment' || !dataId) return res.status(200).json({ ignorado: true });
 
-  if (!mp.firmaValida(req.mercadopago.webhook_secret, req.headers, dataId)) {
+  if (!mp.firmaValida(process.env.MP_WEBHOOK_SECRET, req.headers, dataId)) {
     return res.status(401).json({ error: 'Firma inválida' });
   }
   try {

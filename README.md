@@ -11,6 +11,10 @@ The platform (superadmin) charges each venue a **subscription** through its own 
 
 **Backend:** Node.js + Express + MySQL (MVC, JWT). **Frontend:** React + Vite + TailwindCSS + Axios + Context API.
 
+## MercadoPago (OAuth)
+
+Each venue and the platform link their **own** MercadoPago account with "Conectar con MercadoPago" (official OAuth, refresh tokens renewed automatically). Setup, flow and tests: [MERCADOPAGO_OAUTH.md](MERCADOPAGO_OAUTH.md).
+
 ## PWA and door control (Portería)
 
 The app is installable as a PWA. The **Portería** screen (`/porteria`) scans ticket QR codes with the device camera and marks each ticket as used. Installation, API and desktop/mobile testing: [PORTERIA_PWA.md](PORTERIA_PWA.md).
@@ -22,7 +26,7 @@ The app is installable as a PWA. The **Portería** screen (`/porteria`) scans ti
 cd backend
 cp .env.example .env        # DB_*, JWT_SECRET, CREDENTIALS_KEY, FRONTEND_URL, BACKEND_PUBLIC_URL
 npm install
-npm run migrate             # applies pending migrations (001 → 005), tracked in the `migraciones` table
+npm run migrate             # applies pending migrations (001 → 007), tracked in the `migraciones` table
 npm run seed                # multi-tenant test data (with sample event images)
 npm run dev                 # http://localhost:4000/api
 # npm run db:reset          # drops everything, migrates and seeds again

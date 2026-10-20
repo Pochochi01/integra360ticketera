@@ -7,16 +7,16 @@ const r = Router();
 const admin = staff('admin');
 const superadmin = [verificarToken, requiereRol('superadmin')];
 
-// MercadoPago del complejo (admin del tenant)
+// MercadoPago del complejo (admin del tenant). Se vincula con /api/auth/mercadopago/connect.
 r.get('/mercadopago', admin, c.verMercadoPagoTenant);
-r.put('/mercadopago', admin, c.guardarMercadoPagoTenant);
+r.put('/mercadopago', admin, c.pausarMercadoPagoTenant); // { activo } pausa / reanuda los cobros
 r.post('/mercadopago/probar', admin, c.probarMercadoPagoTenant);
 r.delete('/mercadopago', admin, c.eliminarMercadoPagoTenant);
 
-// MercadoPago de la plataforma (superadmin, cobro de suscripciones)
+// MercadoPago de la plataforma (superadmin, cobro de suscripciones). Se vincula con /api/auth/mercadopago/connect/plataforma.
 r.get('/plataforma/mercadopago', superadmin, c.verMercadoPagoPlataforma);
-r.put('/plataforma/mercadopago', superadmin, c.guardarMercadoPagoPlataforma);
 r.post('/plataforma/mercadopago/probar', superadmin, c.probarMercadoPagoPlataforma);
+r.delete('/plataforma/mercadopago', superadmin, c.eliminarMercadoPagoPlataforma);
 
 // Chatbot: el admin sólo ve el estado; la configuración es exclusiva del superadmin
 r.get('/chatbot/estado', admin, c.estadoChatbotTenant);

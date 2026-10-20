@@ -3,3 +3,6 @@ dist/
 .env
 backend/uploads/
 backend/sessions/
+
+# Secretos de producción
+deploy/*.env.production

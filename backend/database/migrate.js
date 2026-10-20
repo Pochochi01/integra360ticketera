@@ -4,7 +4,7 @@ const path = require('path');
 const mysql = require('mysql2/promise');
 
 const TABLAS = [
-  'porteros', 'baileys_auth', 'pagos', 'suscripciones', 'planes', 'chatbot_integrations', 'mercadopago_integrations', 'ventas_link', 'administradores',
+  'porteros', 'baileys_auth', 'pagos', 'suscripciones', 'planes', 'chatbot_integrations', 'mercadopago_oauth_estados', 'mercadopago_tokens', 'mercadopago_integrations', 'ventas_link', 'administradores',
   'mensajes_whatsapp', 'accesos', 'lista_espera', 'transferencias_ticket', 'tickets', 'ventas', 'links_venta',
   'vendedores', 'asientos', 'tipos_ticket', 'eventos', 'usuarios', 'tenants', 'migraciones',
 ];

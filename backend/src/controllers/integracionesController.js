@@ -1,5 +1,8 @@
 const Tenant = require('../models/Tenant');
-const { MercadoPago, Chatbot } = require('../models/Integracion');
+const { Chatbot } = require('../models/Integracion');
+const { MercadoPagoToken } = require('../models/MercadoPagoToken');
+const mpOAuth = require('../services/mercadopagoOAuth');
+const { conCredenciales } = require('../services/mercadopagoTokens');
 const mp = require('../services/mercadopagoService');
 const chatbot = require('../services/chatbot');
 const { enviarPrueba } = require('../services/notificaciones');
@@ -9,67 +12,46 @@ const { AppError, asyncHandler } = require('../utils/errors');
 const backend = () => (process.env.BACKEND_PUBLIC_URL || `http://localhost:${process.env.PORT || 4000}`).replace(/\/$/, '');
 const webhookUrl = (ambito) => `${backend()}/api/pagos/webhook/mercadopago/${ambito}`;
 
-// ======================= MercadoPago =======================
-
-/** Valida los datos del formulario. En una edición el access token puede omitirse (se conserva el guardado). */
-const validarMercadoPago = (d, existente) => {
-  if (!existente && !d.access_token) throw new AppError(400, 'El access token es obligatorio');
-  if (d.access_token && !/^(APP_USR|TEST)-[\w-]{10,}$/.test(d.access_token)) throw new AppError(400, 'Access token con formato inválido (APP_USR-… o TEST-…)');
-  if (!d.public_key || !/^(APP_USR|TEST)-[\w-]{8,}$/.test(d.public_key)) throw new AppError(400, 'Public key con formato inválido (APP_USR-… o TEST-…)');
-  if (d.collector_id && !/^\d{3,20}$/.test(String(d.collector_id))) throw new AppError(400, 'Collector ID inválido (sólo números)');
-  if (d.modo && !['prueba', 'produccion'].includes(d.modo)) throw new AppError(400, 'Modo inválido');
-};
-
-/**
- * Guarda credenciales verificándolas contra MercadoPago (GET /users/me).
- * Si el collector_id no se envía se completa con el de la cuenta; si se envía debe coincidir.
- */
-const guardarMercadoPago = async (ambito, body) => {
-  const existente = await MercadoPago.obtener(ambito);
-  validarMercadoPago(body, existente);
-  const token = body.access_token || existente.access_token;
-  let cuenta;
-  try {
-    cuenta = await mp.verificarCredenciales(token);
-  } catch (e) {
-    throw new AppError(400, `MercadoPago rechazó las credenciales: ${e.message}`);
-  }
-  if (body.collector_id && String(body.collector_id) !== String(cuenta.id)) {
-    throw new AppError(400, `El collector ID no coincide con la cuenta del token (${cuenta.id})`);
-  }
-  const guardada = await MercadoPago.guardar(ambito, { ...body, access_token: body.access_token || undefined, collector_id: String(cuenta.id) });
-  return { ...guardada, cuenta: { id: cuenta.id, nickname: cuenta.nickname, email: cuenta.email }, webhook_url: webhookUrl(ambito || 'plataforma') };
-};
+// ======================= MercadoPago (vinculado por OAuth) =======================
+// La vinculación (botón «Conectar con MercadoPago») está en mercadopagoOAuthController.
+// Acá: estado de la conexión, pausar cobros, probar y desvincular.
 
 const verMercadoPago = async (ambito) => ({
-  integracion: await MercadoPago.publica(ambito),
+  app_configurada: mpOAuth.configurada(),
+  conexion: await MercadoPagoToken.publica(ambito),
   webhook_url: webhookUrl(ambito || 'plataforma'),
 });
 
+/** Prueba la conexión con un token válido (lo renueva si hace falta) y actualiza el correo vinculado. */
 const probarMercadoPago = async (ambito) => {
-  const cred = await MercadoPago.obtener(ambito);
-  if (!cred) throw new AppError(404, 'No hay credenciales configuradas');
-  try {
-    const cuenta = await mp.verificarCredenciales(cred.access_token);
-    return { ok: true, cuenta: { id: cuenta.id, nickname: cuenta.nickname, email: cuenta.email } };
-  } catch (e) {
-    throw new AppError(502, `MercadoPago rechazó las credenciales: ${e.message}`);
-  }
+  const cuenta = await conCredenciales(ambito, (cred) => mp.cuentaDelToken(cred.access_token));
+  await MercadoPagoToken.actualizarCuenta(ambito, cuenta);
+  return { ok: true, cuenta: { id: cuenta.id, nickname: cuenta.nickname, email: cuenta.email }, conexion: await MercadoPagoToken.publica(ambito) };
 };
 
-// Admin del complejo: su propia cuenta
+const pausarMercadoPago = async (ambito, body) => {
+  if (typeof body.activo !== 'boolean') throw new AppError(400, 'Indique activo: true | false');
+  if (!(await MercadoPagoToken.publica(ambito))) throw new AppError(404, 'No hay una cuenta de MercadoPago conectada');
+  await MercadoPagoToken.setActivo(ambito, body.activo);
+  return verMercadoPago(ambito);
+};
+
+// Admin del complejo: su propia cuenta (cobro de entradas)
 exports.verMercadoPagoTenant = asyncHandler(async (req, res) => res.json(await verMercadoPago(req.tenant.id_tenant)));
-exports.guardarMercadoPagoTenant = asyncHandler(async (req, res) => res.json(await guardarMercadoPago(req.tenant.id_tenant, req.body)));
+exports.pausarMercadoPagoTenant = asyncHandler(async (req, res) => res.json(await pausarMercadoPago(req.tenant.id_tenant, req.body)));
 exports.probarMercadoPagoTenant = asyncHandler(async (req, res) => res.json(await probarMercadoPago(req.tenant.id_tenant)));
 exports.eliminarMercadoPagoTenant = asyncHandler(async (req, res) => {
-  await MercadoPago.eliminar(req.tenant.id_tenant);
+  await MercadoPagoToken.eliminar(req.tenant.id_tenant);
   res.status(204).end();
 });
 
 // Superadmin: cuenta de la plataforma (cobro de suscripciones)
 exports.verMercadoPagoPlataforma = asyncHandler(async (_req, res) => res.json(await verMercadoPago(0)));
-exports.guardarMercadoPagoPlataforma = asyncHandler(async (req, res) => res.json(await guardarMercadoPago(0, req.body)));
 exports.probarMercadoPagoPlataforma = asyncHandler(async (_req, res) => res.json(await probarMercadoPago(0)));
+exports.eliminarMercadoPagoPlataforma = asyncHandler(async (_req, res) => {
+  await MercadoPagoToken.eliminar(0);
+  res.status(204).end();
+});
 
 // ======================= Chatbot (sólo superadmin) =======================
 

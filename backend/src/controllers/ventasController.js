@@ -182,8 +182,8 @@ exports.pagar = asyncHandler(async (req, res) => {
   if (venta.estado !== 'pendiente') throw new AppError(409, `La venta está ${venta.estado}`);
 
   if (venta.metodo_pago === 'mercadopago') {
-    const pref = await pagos.preferenciaDeVenta(req.mercadopago, venta, await Ticket.findByVenta(venta.id_venta));
-    const url = req.mercadopago.modo === 'prueba' && pref.sandbox_init_point ? pref.sandbox_init_point : pref.init_point;
+    const pref = await pagos.preferenciaDeVenta(venta, await Ticket.findByVenta(venta.id_venta));
+    const url = !req.mercadopago.live_mode && pref.sandbox_init_point ? pref.sandbox_init_point : pref.init_point;
     return res.json({ pago: { estado: 'redirigir', url, id_pago: pref.id_pago }, venta });
   }
 

@@ -6,6 +6,7 @@ const router = Router();
 // Identifica el tenant público (subdominio o X-Tenant) en todas las peticiones
 router.use(resolverTenant);
 
+router.use('/auth/mercadopago', require('./mercadopagoOAuth'));
 router.use('/auth', require('./auth'));
 router.use('/tenants', require('./tenants'));
 router.use('/usuarios', require('./usuarios'));

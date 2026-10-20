@@ -127,15 +127,18 @@ export const publicoApi = {
 };
 
 export const integracionesApi = {
+  // MercadoPago del complejo (OAuth): conectar devuelve { url } de autorización de MercadoPago
   mercadoPago: () => api.get('/integraciones/mercadopago').then(datos),
-  guardarMercadoPago: (d) => api.put('/integraciones/mercadopago', d).then(datos),
+  conectarMercadoPago: () => api.get('/auth/mercadopago/connect').then(datos),
+  pausarMercadoPago: (activo) => api.put('/integraciones/mercadopago', { activo }).then(datos),
   probarMercadoPago: () => api.post('/integraciones/mercadopago/probar').then(datos),
   eliminarMercadoPago: () => api.delete('/integraciones/mercadopago'),
   estadoChatbot: () => api.get('/integraciones/chatbot/estado').then(datos),
   // superadmin
   mercadoPagoPlataforma: () => api.get('/integraciones/plataforma/mercadopago').then(datos),
-  guardarMercadoPagoPlataforma: (d) => api.put('/integraciones/plataforma/mercadopago', d).then(datos),
+  conectarMercadoPagoPlataforma: () => api.get('/auth/mercadopago/connect/plataforma').then(datos),
   probarMercadoPagoPlataforma: () => api.post('/integraciones/plataforma/mercadopago/probar').then(datos),
+  eliminarMercadoPagoPlataforma: () => api.delete('/integraciones/plataforma/mercadopago'),
   chatbot: (idTenant) => api.get(`/integraciones/chatbot/${idTenant}`).then(datos),
   guardarChatbot: (idTenant, d) => api.put(`/integraciones/chatbot/${idTenant}`, d).then(datos),
   eliminarChatbot: (idTenant) => api.delete(`/integraciones/chatbot/${idTenant}`),

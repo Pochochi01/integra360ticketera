@@ -1,10 +1,11 @@
-const { MercadoPago } = require('../models/Integracion');
+const { credencialesValidas } = require('../services/mercadopagoTokens');
 const Venta = require('../models/Venta');
 const chatbot = require('../services/chatbot');
 const { AppError } = require('../utils/errors');
 
 /**
- * Selecciona dinámicamente las credenciales de MercadoPago y las deja en req.mercadopago.
+ * Inyecta en req.mercadopago un access token de MercadoPago VÁLIDO (renovado con el refresh token si
+ * estaba por vencer) de la cuenta que corresponde. req.ambitoMercadoPago queda con el ámbito.
  *  - 'sesion':     tenant del admin autenticado (req.tenant)
  *  - 'venta':      tenant dueño de la venta :id (el comprador paga al complejo, no a la plataforma)
  *  - 'plataforma': cuenta del superadmin (cobro de suscripciones)
@@ -26,10 +27,13 @@ const seleccionarMercadoPago = (origen, { soloSiLaVentaUsaMercadoPago = false } 
     }
     if (!Number.isInteger(ambito)) throw new AppError(400, 'Ámbito de MercadoPago inválido');
 
-    const cred = await MercadoPago.obtener(ambito);
-    if (!cred || !cred.activo) {
-      throw new AppError(409, ambito === 0 ? 'La plataforma no tiene MercadoPago configurado' : 'El complejo no tiene MercadoPago configurado');
+    // Webhooks: sólo se identifica el ámbito; el pago se consulta después con conCredenciales
+    if (origen === 'webhook') {
+      req.ambitoMercadoPago = ambito;
+      return next();
     }
+    const cred = await credencialesValidas(ambito);
+    if (!cred.activo) throw new AppError(409, 'El complejo pausó los cobros con MercadoPago');
     req.mercadopago = cred;
     req.ambitoMercadoPago = ambito;
     next();

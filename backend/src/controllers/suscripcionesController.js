@@ -53,13 +53,14 @@ exports.asignarPlan = asyncHandler(async (req, res) => {
   res.json(await conPagos(await Suscripcion.asignarPlan(req.params.idTenant, plan.id_plan)));
 });
 
-/** Genera un link de cobro de un mes con la cuenta MercadoPago de la plataforma (req.mercadopago). */
+/** Genera un link de cobro de un mes con la cuenta MercadoPago de la plataforma (OAuth, ámbito 0). */
 const generarCobro = async (req, idTenant) => {
   const s = await Suscripcion.findByTenant(idTenant);
   if (!s) throw new AppError(409, 'El complejo no tiene un plan asignado');
   if (s.estado === 'cancelada') throw new AppError(409, 'La suscripción está cancelada');
-  const pref = await preferenciaDeSuscripcion(req.mercadopago, s);
-  return { url: req.mercadopago.modo === 'prueba' && pref.sandbox_init_point ? pref.sandbox_init_point : pref.init_point, id_pago: pref.id_pago };
+  const pref = await preferenciaDeSuscripcion(s);
+  // Credenciales de prueba (live_mode = false) → checkout sandbox
+  return { url: !req.mercadopago.live_mode && pref.sandbox_init_point ? pref.sandbox_init_point : pref.init_point, id_pago: pref.id_pago };
 };
 
 exports.cobrar = asyncHandler(async (req, res) => res.json(await generarCobro(req, Number(req.params.idTenant))));

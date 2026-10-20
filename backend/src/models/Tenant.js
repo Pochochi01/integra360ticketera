@@ -34,7 +34,8 @@ const Tenant = {
                 WHERE e.id_tenant = x.id_tenant AND v.estado = 'pagado') AS recaudado,
               (SELECT provider FROM chatbot_integrations c WHERE c.id_tenant = x.id_tenant) AS chatbot_provider,
               (SELECT estado FROM chatbot_integrations c WHERE c.id_tenant = x.id_tenant) AS chatbot_estado,
-              (SELECT activo FROM mercadopago_integrations m WHERE m.id_tenant = x.id_tenant) AS mercadopago_activo
+              (SELECT m.activo AND m.estado = 'conectado' FROM mercadopago_tokens m WHERE m.id_tenant = x.id_tenant) AS mercadopago_activo,
+              (SELECT m.correo_vinculado FROM mercadopago_tokens m WHERE m.id_tenant = x.id_tenant) AS mercadopago_correo
          FROM (${SELECT}) x ORDER BY x.nombre`
     ))[0].map(mapear),
 

@@ -72,7 +72,7 @@ export default function SuperTenants() {
             <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">{t.direccion} {t.email_contacto && `· ${t.email_contacto}`}</p>
             <p className="mt-2 text-sm">{t.eventos} eventos · {t.vendedores} vendedores · {importe(t.recaudado)} recaudado</p>
             <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
-              Plan: {t.plan || 'sin plan'} {t.suscripcion_estado && `(${t.suscripcion_estado})`} · MercadoPago: {t.mercadopago_activo ? 'activo' : 'no'} ·
+              Plan: {t.plan || 'sin plan'} {t.suscripcion_estado && `(${t.suscripcion_estado})`} · MercadoPago: {t.mercadopago_activo ? (t.mercadopago_correo || 'conectado') : t.mercadopago_correo ? 'requiere atención' : 'sin conectar'} ·
               WhatsApp: {t.chatbot_provider ? `${t.chatbot_provider} (${t.chatbot_estado})` : 'sin configurar'}
             </p>
             <div className="mt-4 flex flex-wrap gap-2">

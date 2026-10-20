@@ -2,7 +2,8 @@ const pool = require('../config/db');
 const Pago = require('../models/Pago');
 const Venta = require('../models/Venta');
 const Ticket = require('../models/Ticket');
-const { MercadoPago } = require('../models/Integracion');
+const { MercadoPagoToken } = require('../models/MercadoPagoToken');
+const { conCredenciales } = require('./mercadopagoTokens');
 const { Suscripcion } = require('../models/Suscripcion');
 const mp = require('./mercadopagoService');
 const { enviarEntradasPorWhatsapp } = require('./notificaciones');
@@ -11,11 +12,11 @@ const simulados = () => process.env.PAGOS_SIMULADOS === 'true';
 const backend = () => (process.env.BACKEND_PUBLIC_URL || `http://localhost:${process.env.PORT || 4000}`).replace(/\/$/, '');
 const frontend = () => (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
 
-/** Métodos de pago que ofrece un complejo: MercadoPago si tiene cuenta activa, transferencia, y los simulados en desarrollo. */
+/** Métodos de pago que ofrece un complejo: MercadoPago si tiene una cuenta conectada y activa, transferencia, y los simulados en desarrollo. */
 const metodosDisponibles = async (idTenant) => {
-  const cuenta = await MercadoPago.obtener(idTenant);
+  const cuenta = await MercadoPagoToken.publica(idTenant);
   return [
-    ...(cuenta?.activo ? ['mercadopago'] : []),
+    ...(cuenta?.conectado && cuenta.activo ? ['mercadopago'] : []),
     'transferencia',
     ...(simulados() ? ['tarjeta', 'billetera'] : []),
   ];
@@ -35,8 +36,8 @@ const aprobarVenta = async (conn, idVenta, idPago, referencia = null) => {
   return { cambio: true, venta };
 };
 
-/** Crea (o reutiliza) la preferencia de Checkout Pro de una venta con la cuenta del tenant. */
-const preferenciaDeVenta = async (cred, venta, tickets) => {
+/** Crea (o reutiliza) la preferencia de Checkout Pro de una venta con la cuenta del tenant (ámbito = id_tenant). */
+const preferenciaDeVenta = async (venta, tickets) => {
   const existente = await Pago.pendienteDeVenta(venta.id_venta, 'mercadopago');
   if (existente?.preference_id && existente.detalle) return { id_pago: existente.id_pago, ...JSON.parse(existente.detalle) };
 
@@ -47,30 +48,30 @@ const preferenciaDeVenta = async (cred, venta, tickets) => {
     porTipo[t.id_tipo].quantity++;
   }
   const retorno = `${frontend()}/ventas/${venta.id_venta}/resultado`;
-  const pref = await mp.crearPreferencia(cred, {
+  const pref = await conCredenciales(venta.id_tenant, (cred) => mp.crearPreferencia(cred, {
     titulo: venta.tenant,
     items: Object.values(porTipo),
     externalReference: `venta:${venta.id_venta}:pago:${idPago}`,
     notificationUrl: `${backend()}/api/pagos/webhook/mercadopago/${venta.id_tenant}`,
     backUrls: { success: retorno, pending: retorno, failure: retorno },
     payer: { email: venta.email_comprador },
-  });
+  }));
   const links = { init_point: pref.init_point, sandbox_init_point: pref.sandbox_init_point };
   await Pago.actualizar(idPago, { preference_id: pref.id, detalle: JSON.stringify(links) });
   return { id_pago: idPago, ...links };
 };
 
-/** Preferencia para cobrar un mes de suscripción con la cuenta de la plataforma. */
-const preferenciaDeSuscripcion = async (cred, suscripcion) => {
+/** Preferencia para cobrar un mes de suscripción con la cuenta de la plataforma (ámbito 0). */
+const preferenciaDeSuscripcion = async (suscripcion) => {
   const idPago = await Pago.create({ id_suscripcion: suscripcion.id_suscripcion, proveedor: 'mercadopago', monto: suscripcion.precio_mensual });
   const retorno = `${frontend()}/admin/complejo`;
-  const pref = await mp.crearPreferencia(cred, {
+  const pref = await conCredenciales(0, (cred) => mp.crearPreferencia(cred, {
     titulo: 'Integra360',
     items: [{ title: `Integra360 · Plan ${suscripcion.plan} · 1 mes`, quantity: 1, unit_price: suscripcion.precio_mensual }],
     externalReference: `suscripcion:${suscripcion.id_suscripcion}:pago:${idPago}`,
     notificationUrl: `${backend()}/api/pagos/webhook/mercadopago/plataforma`,
     backUrls: { success: retorno, pending: retorno, failure: retorno },
-  });
+  }));
   const links = { init_point: pref.init_point, sandbox_init_point: pref.sandbox_init_point };
   await Pago.actualizar(idPago, { preference_id: pref.id, detalle: JSON.stringify(links) });
   return { id_pago: idPago, ...links };
@@ -82,13 +83,15 @@ const preferenciaDeSuscripcion = async (cred, suscripcion) => {
  * valida referencia, monto y cuenta receptora, y actualiza el estado de forma idempotente.
  */
 const procesarPagoMercadoPago = async (ambito, paymentId) => {
-  const cred = await MercadoPago.obtener(ambito);
-  if (!cred) throw new Error('Cuenta de MercadoPago no configurada');
-  const pagoMp = await mp.obtenerPago(cred, paymentId);
+  let cuentaReceptora;
+  const pagoMp = await conCredenciales(Number(ambito), (cred) => {
+    cuentaReceptora = cred.mp_user_id;
+    return mp.obtenerPago(cred, paymentId);
+  });
   const [tipo, idOrigen, , idPagoStr] = String(pagoMp.external_reference || '').split(':');
   const idPago = Number(idPagoStr);
   if (!idPago || !['venta', 'suscripcion'].includes(tipo)) return { ignorado: 'Referencia externa desconocida' };
-  if (cred.collector_id && pagoMp.collector_id && String(pagoMp.collector_id) !== String(cred.collector_id)) {
+  if (cuentaReceptora && pagoMp.collector_id && String(pagoMp.collector_id) !== String(cuentaReceptora)) {
     return { ignorado: 'El pago no pertenece a esta cuenta' };
   }
   const estado = mp.mapearEstado(pagoMp.status);
@@ -132,7 +135,7 @@ const procesarPagoMercadoPago = async (ambito, paymentId) => {
 
   if (enviarWhatsapp) resultado.whatsapp = await enviarEntradasPorWhatsapp(enviarWhatsapp);
   if (reembolsoTardio) {
-    await mp.reembolsar(cred, reembolsoTardio.paymentId);
+    await conCredenciales(Number(ambito), (cred) => mp.reembolsar(cred, reembolsoTardio.paymentId));
     await Pago.actualizar(reembolsoTardio.idPago, { estado: 'reembolsado' });
   }
   return resultado;
@@ -142,9 +145,7 @@ const procesarPagoMercadoPago = async (ambito, paymentId) => {
 const reembolsarEnMercadoPago = async (venta) => {
   const pagos = (await Pago.findByVenta(venta.id_venta)).filter((p) => p.proveedor === 'mercadopago' && p.estado === 'aprobado');
   if (!pagos.length) return;
-  const cred = await MercadoPago.obtener(venta.id_tenant);
-  if (!cred) throw new Error('No se puede reembolsar: el complejo no tiene MercadoPago configurado');
-  for (const p of pagos) await mp.reembolsar(cred, p.referencia_externa);
+  for (const p of pagos) await conCredenciales(venta.id_tenant, (cred) => mp.reembolsar(cred, p.referencia_externa));
 };
 
 module.exports = { metodosDisponibles, aprobarVenta, preferenciaDeVenta, preferenciaDeSuscripcion, procesarPagoMercadoPago, reembolsarEnMercadoPago };
