@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { Armchair, Bank, Bell, CalendarBlank, CreditCard, Handshake, MapPin, Minus, Plus, ShieldCheck, Ticket, UsersThree, Wallet } from '@phosphor-icons/react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { eventosApi, mensajeError, urlUpload, ventasApi } from '../api/client';
+import { eventosApi, linksPagoApi, mensajeError, urlUpload, ventasApi } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { useTickets } from '../context/TicketsContext';
 import { useTenant } from '../context/TenantContext';
@@ -36,6 +36,8 @@ export default function EventoDetalle() {
   const [error, setError] = useState('');
   const [aviso, setAviso] = useState('');
   const [enviando, setEnviando] = useState(false);
+  // Compra sin cuenta desde el link de un vendedor: datos del comprador para MercadoPago
+  const [invitadoDatos, setInvitadoDatos] = useState({ nombre: '', email: '' });
 
   const cargar = () =>
     eventosApi
@@ -78,6 +80,11 @@ export default function EventoDetalle() {
   const referidoValido =
     referido && referido.id_tenant === evento.id_tenant && (!referido.id_evento || referido.id_evento === evento.id_evento) ? referido : null;
 
+  // Llegó por el link de un vendedor y no inició sesión: compra como invitado con MercadoPago del complejo
+  const invitado = !usuario && !!referidoValido && evento.metodos_pago.includes('mercadopago');
+  const metodosVisibles = invitado ? ['mercadopago'] : evento.metodos_pago;
+  const invitadoValido = invitadoDatos.nombre.trim().length >= 2 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(invitadoDatos.email.trim()) && whatsappOk;
+
   const cambiarCantidad = (t, delta) => {
     const actual = cantidades[t.id_tipo] || 0;
     const nueva = Math.max(0, Math.min(actual + delta, t.stock_disponible));
@@ -93,7 +100,38 @@ export default function EventoDetalle() {
     setAsientosSel([...asientosSel, a.id_asiento]);
   };
 
+  /**
+   * Invitado: POST /api/links/generar con el código del link del vendedor. El backend identifica al vendedor
+   * y a su complejo, crea la preferencia con el token OAuth de ESE complejo y devuelve el init_point.
+   */
+  const comprarComoInvitado = async () => {
+    if (!invitadoValido) return setError('Completá tu nombre, email y WhatsApp');
+    setEnviando(true);
+    setError('');
+    try {
+      const items = Object.entries(cantidadesFinales).filter(([, c]) => c > 0).map(([id_tipo, cantidad]) => ({
+        id_tipo: Number(id_tipo),
+        cantidad,
+        asientos: evento.tiene_seating
+          ? asientosSel.filter((idA) => evento.asientos.find((a) => a.id_asiento === idA).id_tipo === Number(id_tipo))
+          : undefined,
+      }));
+      const r = await linksPagoApi.generar({
+        codigo_link: referidoValido.codigo, tipo_pago: 'mercadopago', id_evento: evento.id_evento, items,
+        comprador: { nombre: invitadoDatos.nombre.trim(), email: invitadoDatos.email.trim(), telefono: whatsapp },
+      });
+      window.location.href = r.url; // checkout de MercadoPago (init_point)
+    } catch (e) {
+      const msg = mensajeError(e);
+      if (/link de venta/i.test(msg)) setReferido(null);
+      setError(msg);
+      cargar();
+      setEnviando(false);
+    }
+  };
+
   const comprar = async () => {
+    if (invitado) return comprarComoInvitado();
     if (!usuario) return navigate('/login', { state: { volver: `/eventos/${id}` } });
     if (!whatsappOk) return setError('Ingresá un número de WhatsApp válido para recibir tus entradas');
     setEnviando(true);
@@ -301,7 +339,7 @@ export default function EventoDetalle() {
               <fieldset>
                 <legend className="label">Método de pago</legend>
                 <div className="grid gap-2">
-                  {evento.metodos_pago.map((valor) => {
+                  {metodosVisibles.map((valor) => {
                     const { icono: Icono, titulo, detalle } = METODOS[valor];
                     const activo = metodo === valor;
                     return (
@@ -330,10 +368,25 @@ export default function EventoDetalle() {
             {usuario && esComprador && totalCantidad > 0 && (
               <WhatsappInput label="WhatsApp para recibir las entradas" value={whatsapp} onChange={setWhatsapp} onValidez={setWhatsappOk} />
             )}
+            {invitado && totalCantidad > 0 && (
+              <fieldset className="space-y-3" data-testid="datos-comprador">
+                <legend className="label">Tus datos</legend>
+                <div>
+                  <label className="label" htmlFor="inv-nombre">Nombre y apellido</label>
+                  <input id="inv-nombre" className="input" autoComplete="name" maxLength={80} value={invitadoDatos.nombre} onChange={(e) => setInvitadoDatos({ ...invitadoDatos, nombre: e.target.value })} />
+                </div>
+                <div>
+                  <label className="label" htmlFor="inv-email">Email</label>
+                  <input id="inv-email" className="input" type="email" autoComplete="email" inputMode="email" value={invitadoDatos.email} onChange={(e) => setInvitadoDatos({ ...invitadoDatos, email: e.target.value })} />
+                </div>
+                <WhatsappInput label="Teléfono (WhatsApp para recibir las entradas)" value={whatsapp} onChange={setWhatsapp} onValidez={setWhatsappOk} />
+                <p className="text-xs text-zinc-500 dark:text-zinc-400">No necesitás cuenta: vas a pagar en MercadoPago y recibís las entradas por WhatsApp.</p>
+              </fieldset>
+            )}
             {usuario && !esComprador && <p className="text-sm text-amber-700 dark:text-amber-300">Ingresá con una cuenta de comprador para comprar.</p>}
             {superaLimite && <p className="text-sm text-rose-600 dark:text-rose-400">Supera el límite de {limite} entradas por persona.</p>}
-            <button className="btn-primary w-full py-3!" disabled={!vendible || totalCantidad === 0 || superaLimite || enviando || (usuario && (!esComprador || !whatsappOk))} onClick={comprar}>
-              {enviando ? 'Procesando…' : usuario ? 'Comprar' : 'Ingresá para comprar'}
+            <button className="btn-primary w-full py-3!" disabled={!vendible || totalCantidad === 0 || superaLimite || enviando || (usuario && (!esComprador || !whatsappOk)) || (invitado && !invitadoValido)} onClick={comprar}>
+              {enviando ? (invitado ? 'Abriendo MercadoPago…' : 'Procesando…') : usuario || invitado ? 'Comprar' : 'Ingresá para comprar'}
             </button>
             {!vendible && <p className="text-center text-sm text-zinc-500 dark:text-zinc-400">Este evento no está a la venta.</p>}
             <p className="flex items-center justify-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-500">

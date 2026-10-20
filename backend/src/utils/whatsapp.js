@@ -25,4 +25,11 @@ const normalizarWhatsapp = (valor, paisDefecto = 'AR') => {
 /** Oculta parte del número para mostrarlo a terceros (+54911****6789). */
 const enmascarar = (e164) => (e164 ? e164.replace(/^(\+\d{5})\d+(\d{4})$/, '$1****$2') : null);
 
-module.exports = { normalizarWhatsapp, enmascarar };
+/** Teléfono E.164 → { area_code, number } como lo pide MercadoPago (payer.phone). */
+const telefonoMercadoPago = (e164) => {
+  const n = e164 ? parsePhoneNumberFromString(e164) : null;
+  // MercadoPago no valida el código de área por separado: va el número nacional completo
+  return n ? { area_code: '', number: String(n.nationalNumber) } : undefined;
+};
+
+module.exports = { normalizarWhatsapp, enmascarar, telefonoMercadoPago };

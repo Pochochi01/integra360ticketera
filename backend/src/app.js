@@ -5,6 +5,8 @@ const routes = require('./routes');
 const errorHandler = require('./middlewares/errorHandler');
 
 const app = express();
+// Detrás de nginx: req.ip es la IP real del cliente (X-Forwarded-For), sólo si el proxy es local
+app.set('trust proxy', 'loopback');
 
 app.use(cors({ origin: process.env.CORS_ORIGIN?.split(',') || '*' }));
 app.use(express.json({ limit: '100kb' }));

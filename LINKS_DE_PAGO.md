@@ -89,3 +89,53 @@ En **Ventas**, el admin ve **«Pendientes de pago en efectivo»**: cada reserva 
 - **Al deshabilitar el efectivo:** el vendedor ya no puede generarlo.
 - **Vencimiento:** una reserva vencida se cancela y devuelve el stock.
 - **Diseño:** móvil en claro y oscuro sin scroll horizontal.
+
+## Compra del cliente desde el link del vendedor (sin cuenta)
+
+1. El vendedor comparte su link de venta (`/v/<código>`).
+2. El cliente elige las entradas y completa **nombre y apellido, email y teléfono (WhatsApp)**, sin crear cuenta. Al tocar **Comprar**, el frontend llama a `POST /api/links/generar` con el `codigo_link`.
+3. El backend identifica al vendedor y a **su** complejo a partir del link, nunca de `tenant_id` ni `seller_id` del cuerpo; si se envían y no coinciden, responde 403.
+4. Crea la preferencia con el access token OAuth de ese complejo, renovándolo antes si hace falta. La preferencia lleva:
+   - `payer` (name, surname, email, phone);
+   - `back_urls` a la página de la reserva;
+   - la `notification_url` del complejo.
+5. El frontend redirige con `window.location.href = init_point`.
+
+Reglas del modo público:
+
+- sólo MercadoPago;
+- email obligatorio;
+- reserva de 30 min (`LINK_COMPRADOR_RESERVA_MIN`);
+- como máximo 15 pedidos cada 10 min por IP (`LINK_PUBLICO_MAX_POR_IP`);
+- la venta queda atribuida al link del vendedor.
+
+Con email, el comprador se identifica sólo por email: dos personas pueden compartir un teléfono.
+
+## Webhook único
+
+`POST /api/pagos/webhook` es la URL para cargar en **Webhooks** de la aplicación de MercadoPago. Identifica el complejo por el `user_id` de la notificación, que es la cuenta de MercadoPago que recibió el pago.
+
+- **Verificaciones:** valida la firma (`MP_WEBHOOK_SECRET`) y consulta el pago con el token de esa cuenta.
+- **Pago de otra cuenta:** si se notifica con la cuenta equivocada, se ignora y no se acredita.
+- **Ruta por complejo:** cada preferencia además envía su propia `notification_url`, `/api/pagos/webhook/mercadopago/<id del complejo>`.
+
+Vista **`reservations`** (migración 010), sobre `ventas` + `pagos`:
+
+| columna | origen |
+|---|---|
+| `id`, `tenant_id`, `seller_id` | venta, evento, vendedor |
+| `buyer_name`, `buyer_email`, `buyer_phone` | comprador |
+| `tipo_pago` | `ventas.metodo_pago` |
+| `estado` | `approved` (pagada), `pending`, `rejected` (último intento rechazado; la reserva sigue abierta), `cancelled`, `refunded` |
+
+Pruebas (35 verificaciones en Edge):
+
+- **Compra:** el link del vendedor muestra el formulario y sólo MercadoPago, y redirige al `init_point` del complejo correcto. La preferencia lleva los datos del comprador y las `back_urls` del frontend.
+- **Webhook único:**
+  - `approved` cuando el comprador cierra la pestaña sin volver;
+  - `rejected` con un pago rechazado y `pending` con uno en proceso;
+  - firma inválida → 401; cuenta desconocida → ignorado.
+- **Aislamiento:** Norte y Luna cobran cada una en su cuenta. Un pago notificado con la cuenta equivocada no se acredita, y un link de Norte no vende eventos de Luna.
+- **Validaciones:** el `tenant_id` y el `seller_id` del cuerpo se rechazan si no coinciden; desde el link no se puede elegir efectivo; el email es obligatorio; un link inexistente o un pedido sin sesión ni link se rechazan.
+- **Token:** si está por vencer se renueva con el refresh token, y si fue revocado (401) se renueva y se reintenta.
+- **Diseño:** móvil en claro y oscuro.

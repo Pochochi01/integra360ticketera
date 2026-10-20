@@ -7,6 +7,7 @@ const { conCredenciales } = require('./mercadopagoTokens');
 const { Suscripcion } = require('../models/Suscripcion');
 const mp = require('./mercadopagoService');
 const { enviarEntradasPorWhatsapp } = require('./notificaciones');
+const { telefonoMercadoPago } = require('../utils/whatsapp');
 
 const simulados = () => process.env.PAGOS_SIMULADOS === 'true';
 const backend = () => (process.env.BACKEND_PUBLIC_URL || `http://localhost:${process.env.PORT || 4000}`).replace(/\/$/, '');
@@ -53,7 +54,7 @@ const aprobarVenta = async (conn, idVenta, idPago, referencia = null) => {
  * Crea (o reutiliza) la preferencia de Checkout Pro de una venta con la cuenta del tenant (ámbito = id_tenant).
  * Si la venta tiene expira_en (link de vendedor), la preferencia deja de aceptar pagos en ese momento.
  */
-const preferenciaDeVenta = async (venta, tickets) => {
+const preferenciaDeVenta = async (venta, tickets, { pagador } = {}) => {
   const existente = await Pago.pendienteDeVenta(venta.id_venta, 'mercadopago');
   if (existente?.preference_id && existente.detalle) return { id_pago: existente.id_pago, ...JSON.parse(existente.detalle) };
 
@@ -73,7 +74,13 @@ const preferenciaDeVenta = async (venta, tickets) => {
     externalReference: `venta:${venta.id_venta}:pago:${idPago}`,
     notificationUrl: `${backend()}/api/pagos/webhook/mercadopago/${venta.id_tenant}`,
     backUrls: { success: retorno, pending: retorno, failure: retorno },
-    payer: venta.email_comprador ? { email: venta.email_comprador } : undefined,
+    // Datos del comprador para el checkout (los del formulario si los hay; si no, los de su cuenta)
+    payer: {
+      name: (pagador?.nombre || venta.comprador || '').split(' ')[0] || undefined,
+      surname: pagador?.apellido || (pagador?.nombre || venta.comprador || '').split(' ').slice(1).join(' ') || undefined,
+      email: pagador?.email || venta.email_comprador || undefined,
+      phone: telefonoMercadoPago(pagador?.telefono || venta.whatsapp_contacto),
+    },
     expiraEn: venta.expira_en || null,
   }));
   const links = { init_point: pref.init_point, sandbox_init_point: pref.sandbox_init_point };

@@ -32,8 +32,9 @@ const TIPOS = ['mercadopago', 'efectivo'];
 /** No se confía en tenant_id / seller_id del cuerpo: si vienen, tienen que ser los de la sesión. */
 exports.verificarAlcance = (req, _res, next) => {
   const { tenant_id, seller_id } = req.body;
-  if (tenant_id !== undefined && Number(tenant_id) !== req.tenant.id_tenant) return next(new AppError(403, 'El complejo no corresponde a tu sesión'));
-  if (seller_id !== undefined && Number(seller_id) !== req.vendedor.id_vendedor) return next(new AppError(403, 'El vendedor no corresponde a tu sesión'));
+  const origen = req.origenPublico ? 'al link de venta' : 'a tu sesión';
+  if (tenant_id !== undefined && Number(tenant_id) !== req.tenant.id_tenant) return next(new AppError(403, `El complejo no corresponde ${origen}`));
+  if (seller_id !== undefined && Number(seller_id) !== req.vendedor.id_vendedor) return next(new AppError(403, `El vendedor no corresponde ${origen}`));
   const tipo = req.body.tipo_pago || 'mercadopago';
   if (!TIPOS.includes(tipo)) return next(new AppError(400, 'tipo_pago inválido (mercadopago | efectivo)'));
   req.body.tipo_pago = tipo;
@@ -50,14 +51,19 @@ exports.resolverComprador = asyncHandler(async (req, _res, next) => {
   const nombre = String(c.nombre || '').trim();
   if (!nombre) throw new AppError(400, 'El nombre del comprador es obligatorio');
   if (nombre.length > 80) throw new AppError(400, 'El nombre es demasiado largo');
-  const whatsapp = normalizarWhatsapp(c.whatsapp, process.env.WHATSAPP_PAIS_DEFECTO || 'AR');
+  // telefono = WhatsApp (por ahí se le envían las entradas)
+  const whatsapp = normalizarWhatsapp(c.telefono || c.whatsapp, process.env.WHATSAPP_PAIS_DEFECTO || 'AR');
   if (!whatsapp) throw new AppError(400, 'WhatsApp del comprador inválido (debe ser un celular, ej. +54 9 11 2345 6789)');
   const email = c.email ? String(c.email).trim().toLowerCase() : null;
   if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new AppError(400, 'Email del comprador inválido');
+  // Desde el link público el email es obligatorio: MercadoPago lo usa para el comprobante
+  if (req.origenPublico && !email) throw new AppError(400, 'El email es obligatorio');
 
+  // Con email, el comprador se identifica sólo por email (dos personas pueden compartir un teléfono).
+  // Sin email (el vendedor cargó sólo el WhatsApp), se reutiliza el comprador con ese WhatsApp.
   let usuario = email ? await Usuario.findByEmail(email) : null;
   if (usuario && usuario.rol !== 'comprador') throw new AppError(409, 'Ese email pertenece a una cuenta del personal');
-  if (!usuario) {
+  if (!usuario && !email) {
     const [[porWhatsapp]] = await pool.query("SELECT id_usuario FROM usuarios WHERE whatsapp = ? AND rol = 'comprador' ORDER BY id_usuario LIMIT 1", [whatsapp]);
     usuario = porWhatsapp;
   }
@@ -79,7 +85,11 @@ exports.generar = asyncHandler(async (req, res) => {
   const evento = req.compra.evento;
   // Reserva: MercadoPago 24 h (el comprador recibe el link y paga después); efectivo 72 h.
   // Nunca más allá del inicio del evento.
-  const vence = Math.min(Date.now() + (tipo === 'efectivo' ? horas('EFECTIVO_RESERVA_HORAS', 72) : horas('LINK_MP_RESERVA_HORAS', 24)), new Date(evento.fecha).getTime());
+  // El comprador que compra desde el link paga en el momento: 30 min (como una compra común).
+  const duracion = req.origenPublico
+    ? Number(process.env.LINK_COMPRADOR_RESERVA_MIN || 30) * 60 * 1000
+    : tipo === 'efectivo' ? horas('EFECTIVO_RESERVA_HORAS', 72) : horas('LINK_MP_RESERVA_HORAS', 24);
+  const vence = Math.min(Date.now() + duracion, new Date(evento.fecha).getTime());
   const { venta, tickets } = await ejecutarVenta(req.compra, { expiraEn: new Date(vence) });
 
   // Sin costo (todas las entradas a $0): ya quedan emitidas y validadas
@@ -90,7 +100,10 @@ exports.generar = asyncHandler(async (req, res) => {
   if (tipo === 'mercadopago') {
     let pref;
     try {
-      pref = await pagos.preferenciaDeVenta(venta, tickets);
+      const cp = req.body.comprador || {};
+      pref = await pagos.preferenciaDeVenta(venta, tickets, {
+        pagador: { nombre: cp.nombre?.trim(), apellido: cp.apellido?.trim(), email: cp.email?.trim().toLowerCase(), telefono: req.body.whatsapp },
+      });
     } catch (e) {
       // Si MercadoPago falla, se libera la reserva para no retener stock sin link de pago
       await pool.withTransaction(async (conn) => liberarVenta(conn, await Venta.lockById(venta.id_venta, conn), 'cancelado'));

@@ -27,7 +27,7 @@ const TABLAS = [
 
   if (process.argv.includes('--fresh')) {
     await conn.query('SET FOREIGN_KEY_CHECKS=0');
-    await conn.query('DROP VIEW IF EXISTS entradas, eventos_inscripciones, reservas');
+    await conn.query('DROP VIEW IF EXISTS entradas, eventos_inscripciones, reservas, reservations');
     for (const t of TABLAS) await conn.query(`DROP TABLE IF EXISTS ${t}`);
     await conn.query('SET FOREIGN_KEY_CHECKS=1');
     console.log('Tablas eliminadas');

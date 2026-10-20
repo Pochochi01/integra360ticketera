@@ -1,16 +1,20 @@
 const { Router } = require('express');
 const { soloVendedor } = require('../middlewares/tenant');
+const { origenLinkPago } = require('../middlewares/origenLinkPago');
 const { validarCompra } = require('../middlewares/validarCompra');
 const c = require('../controllers/linksPagoController');
 
 /**
- * Links de pago de vendedores (montado en /api/links).
- * Cadena: vendedor activo de su complejo → tenant_id / seller_id de la sesión → comprador →
- *         validación de la compra (stock, límites, medio habilitado) → reserva + link.
+ * Links de pago (montado en /api/links).
+ *
+ * POST /generar — dos orígenes (ver middlewares/origenLinkPago.js):
+ *   · el vendedor con sesión arma la compra de un cliente (MercadoPago o efectivo)
+ *   · el comprador, sin cuenta, desde el link de venta del vendedor (body.codigo_link): completa sus
+ *     datos, se crea la preferencia con la cuenta del complejo y el frontend lo redirige al init_point
+ * Cadena: origen → tenant_id / seller_id del servidor → comprador → validación de la compra → reserva + link.
  */
 const r = Router();
-r.use(soloVendedor);
-r.post('/generar', c.verificarAlcance, c.resolverComprador, validarCompra('vendedor'), c.generar);
-r.get('/', c.listar);
+r.post('/generar', origenLinkPago, c.verificarAlcance, c.resolverComprador, validarCompra('vendedor'), c.generar);
+r.get('/', soloVendedor, c.listar);
 
 module.exports = r;

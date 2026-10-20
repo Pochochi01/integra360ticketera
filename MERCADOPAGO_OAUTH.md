@@ -9,8 +9,8 @@ Nadie pega access tokens: el sistema guarda `access_token` y `refresh_token` cif
 1. En [MercadoPago Developers → Tus integraciones](https://www.mercadopago.com.ar/developers/panel/app), crear una aplicación de tipo **Checkout Pro / pagos online**.
 2. En **Detalles de aplicación → URLs de redireccionamiento**, cargar exactamente:
    `https://TU_DOMINIO/api/auth/mercadopago/callback`
-3. En **Webhooks**, configurar la URL de notificaciones de *Pagos*, por ejemplo
-   `https://TU_DOMINIO/api/pagos/webhook/mercadopago/plataforma` (sólo valida que el dominio sea correcto).
+3. En **Webhooks**, configurar la URL de notificaciones de *Pagos*: `https://TU_DOMINIO/api/pagos/webhook`
+   (URL única: identifica el complejo por el `user_id` de la notificación).
    Cada cobro envía su propia `notification_url` a la cuenta que corresponde. Copiar la **Clave secreta**.
 4. Copiar **Client ID** y **Client Secret** al `.env` del backend:
 

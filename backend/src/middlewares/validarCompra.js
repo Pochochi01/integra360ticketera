@@ -129,7 +129,7 @@ const validarCompra = (tipoVenta = 'normal') => async (req, _res, next) => {
     if (comoNormal && !whatsappNormalizado) throw new AppError(400, 'El número de WhatsApp es obligatorio para recibir las entradas');
 
     // El vendedor queda como canal de la venta (sin link público asociado)
-    if (esVendedor) vendedor = { id_vendedor: req.vendedor.id_vendedor, id_link: null };
+    if (esVendedor) vendedor = { id_vendedor: req.vendedor.id_vendedor, id_link: req.linkVenta?.id_link || null };
 
     req.compra = {
       vendedor,

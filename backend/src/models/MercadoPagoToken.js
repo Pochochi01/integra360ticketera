@@ -80,6 +80,10 @@ const MercadoPagoToken = {
       [segundos]
     ))[0].map((r) => r.ambito),
 
+  /** Ámbito (id_tenant o 0) de la cuenta de MercadoPago que recibió un pago, o null si no está vinculada. */
+  ambitoDeCuenta: async (mpUserId) =>
+    (await pool.query('SELECT ambito FROM mercadopago_tokens WHERE mp_user_id = ? ORDER BY ambito LIMIT 1', [String(mpUserId)]))[0][0]?.ambito ?? null,
+
   eliminar: (ambito) => pool.query('DELETE FROM mercadopago_tokens WHERE ambito = ?', [ambito || 0]),
 };
 
