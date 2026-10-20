@@ -27,11 +27,12 @@ const SELECT_VENTA = `
 
 const Venta = {
   /** Listado filtrable; id_tenant es obligatorio para el panel de un complejo. */
-  findAll: async ({ id_tenant, estado, id_evento, id_vendedor } = {}) => {
+  findAll: async ({ id_tenant, estado, id_evento, id_vendedor, metodo_pago } = {}) => {
     const filtros = [];
     const params = [];
     if (id_tenant) { filtros.push('e.id_tenant = ?'); params.push(id_tenant); }
     if (estado) { filtros.push('v.estado = ?'); params.push(estado); }
+    if (metodo_pago) { filtros.push('v.metodo_pago = ?'); params.push(metodo_pago); }
     if (id_evento) { filtros.push('v.id_evento = ?'); params.push(id_evento); }
     if (id_vendedor === 'ninguno') filtros.push('v.id_vendedor IS NULL');
     else if (id_vendedor) { filtros.push('v.id_vendedor = ?'); params.push(id_vendedor); }
@@ -55,10 +56,10 @@ const Venta = {
 
   create: async (d, db) => {
     const [r] = await db.query(
-      `INSERT INTO ventas (id_usuario, id_vendedor, id_evento, monto_total, estado, metodo_pago, tipo_venta, empresa, whatsapp_contacto, token_acceso)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO ventas (id_usuario, id_vendedor, id_evento, monto_total, estado, metodo_pago, tipo_venta, empresa, whatsapp_contacto, token_acceso, expira_en)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [d.id_usuario, d.id_vendedor || null, d.id_evento, d.monto_total, d.estado, d.metodo_pago, d.tipo_venta || 'normal',
-        d.empresa || null, d.whatsapp_contacto || null, d.token_acceso]
+        d.empresa || null, d.whatsapp_contacto || null, d.token_acceso, d.expira_en || null]
     );
     if (d.id_link) await db.query('INSERT INTO ventas_link (id_venta, id_link) VALUES (?, ?)', [r.insertId, d.id_link]);
     return r.insertId;

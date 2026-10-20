@@ -56,7 +56,7 @@ const oauthToken = async (cuerpo) => {
  * Crea una preferencia de Checkout Pro.
  * external_reference identifica qué se cobra ("venta:12:pago:34" / "suscripcion:3:pago:40").
  */
-const crearPreferencia = (cred, { titulo, items, externalReference, notificationUrl, backUrls, payer }) =>
+const crearPreferencia = (cred, { titulo, items, externalReference, notificationUrl, backUrls, payer, expiraEn = null }) =>
   llamar(
     cred.access_token,
     'POST',
@@ -70,6 +70,8 @@ const crearPreferencia = (cred, { titulo, items, externalReference, notification
       payer,
       statement_descriptor: titulo?.slice(0, 22),
       metadata: { external_reference: externalReference },
+      // Vencimiento de la reserva: después de esto MercadoPago no acepta el pago
+      ...(expiraEn ? { expires: true, expiration_date_to: new Date(expiraEn).toISOString() } : {}),
     },
     { 'X-Idempotency-Key': externalReference }
   );

@@ -4,6 +4,7 @@ const Evento = require('../models/Evento');
 const { enmascarar, normalizarWhatsapp } = require('../utils/whatsapp');
 const { enviarLinkDeVenta } = require('../services/notificaciones');
 const chatbot = require('../services/chatbot');
+const { metodosVendedor } = require('../services/pagosService');
 
 const LIMITE_POR_MINUTO = 20;
 const envios = new Map(); // id_vendedor → timestamps de envíos recientes
@@ -24,6 +25,8 @@ exports.perfil = asyncHandler(async (req, res) => {
     tenant: { id_tenant: req.tenant.id_tenant, nombre: req.tenant.nombre, slug: req.tenant.slug },
     whatsapp: vendedor.whatsapp,
     chatbot: await chatbot.disponible(req.tenant.id_tenant),
+    // Medios con los que puede generar links de pago (según la configuración del complejo)
+    medios_pago: await metodosVendedor(req.tenant),
   });
 });
 

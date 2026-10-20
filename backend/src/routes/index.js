@@ -15,6 +15,7 @@ router.use('/ventas', require('./ventas'));
 router.use('/tickets', require('./tickets'));
 router.use('/vendedores', require('./vendedores'));
 router.use('/vendedor', require('./vendedor'));
+router.use('/links', require('./links'));
 router.use('/porteros', require('./porteros'));
 router.use('/publico', require('./publico'));
 router.use('/acceso', require('./acceso'));

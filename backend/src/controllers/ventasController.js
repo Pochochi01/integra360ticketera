@@ -24,7 +24,7 @@ const esStaffDe = (usuario, idTenant) => usuario.rol === 'superadmin' || (usuari
  * Revalida con filas bloqueadas (FOR UPDATE) el límite por persona, el stock y los asientos,
  * de modo que dos compras simultáneas no puedan sobrevender.
  */
-const ejecutarVenta = async (compra, { empresa = null, marcarPagado = false } = {}) => {
+const ejecutarVenta = async (compra, { empresa = null, marcarPagado = false, expiraEn = null } = {}) => {
   const { evento, lineas, idTitular, tipoVenta, vendedor, whatsapp } = compra;
   const total = tipoVenta === 'invitacion' ? 0 : compra.total;
   const metodoPago = total === 0 ? 'cortesia' : compra.metodoPago;
@@ -68,7 +68,7 @@ const ejecutarVenta = async (compra, { empresa = null, marcarPagado = false } = 
       {
         id_usuario: idTitular, id_vendedor: vendedor?.id_vendedor, id_link: vendedor?.id_link, id_evento: evento.id_evento,
         monto_total: total, estado: pagado ? 'pagado' : 'pendiente', metodo_pago: metodoPago, tipo_venta: tipoVenta,
-        empresa, whatsapp_contacto: whatsapp, token_acceso: generarTokenAcceso(),
+        empresa, whatsapp_contacto: whatsapp, token_acceso: generarTokenAcceso(), expira_en: pagado ? null : expiraEn,
       },
       conn
     );
@@ -116,14 +116,23 @@ const liberarVenta = async (conn, venta, nuevoEstado) => {
 };
 
 exports.liberarVenta = liberarVenta;
+exports.ejecutarVenta = ejecutarVenta;
 
-/** Tarea periódica: expira ventas pendientes que superaron su tiempo de reserva. */
+/**
+ * Tarea periódica: expira ventas pendientes que superaron su tiempo de reserva.
+ *  - con expira_en (links de pago de vendedores): al llegar esa fecha
+ *  - sin expira_en: según el método (EXPIRACION_MIN)
+ */
 exports.expirarPendientes = async () => {
+  const [conVencimiento] = await pool.query("SELECT id_venta FROM ventas WHERE estado = 'pendiente' AND expira_en IS NOT NULL AND expira_en < NOW()");
+  const grupos = [conVencimiento];
   for (const [metodo, minutos] of Object.entries(EXPIRACION_MIN)) {
-    const [vencidas] = await pool.query(
-      "SELECT id_venta FROM ventas WHERE estado = 'pendiente' AND metodo_pago = ? AND tipo_venta = 'normal' AND fecha_venta < NOW() - INTERVAL ? MINUTE",
+    grupos.push((await pool.query(
+      "SELECT id_venta FROM ventas WHERE estado = 'pendiente' AND expira_en IS NULL AND metodo_pago = ? AND tipo_venta = 'normal' AND fecha_venta < NOW() - INTERVAL ? MINUTE",
       [metodo, minutos]
-    );
+    ))[0]);
+  }
+  for (const vencidas of grupos) {
     for (const { id_venta } of vencidas) {
       await pool.withTransaction(async (conn) => {
         const v = await Venta.lockById(id_venta, conn);
@@ -230,21 +239,31 @@ exports.verificarPago = asyncHandler(async (req, res) => {
   res.json({ venta: await Venta.findById(venta.id_venta), detalle });
 });
 
-/** POST /api/ventas/:id/confirmar-pago — el admin confirma una transferencia acreditada. */
-exports.confirmarPago = asyncHandler(async (req, res) => {
+/**
+ * POST /api/ventas/:id/confirmar-pago — el admin confirma un cobro manual: transferencia acreditada o
+ * pago en efectivo recibido. Los tickets pasan de 'pendiente' a 'valido' (validado = true) y recién
+ * ahí sirven para ingresar. Queda registrado quién lo confirmó y cuándo (pagos.id_validador / validado_en).
+ * POST /api/ventas/:id/validar-efectivo es el mismo endpoint restringido a ventas en efectivo.
+ */
+const confirmarCobroManual = ({ soloEfectivo = false } = {}) => asyncHandler(async (req, res) => {
   const venta = await pool.withTransaction(async (conn) => {
     const v = await Venta.lockById(req.params.id, conn);
     if (!v || v.id_tenant !== req.tenant.id_tenant) throw new AppError(404, 'Venta no encontrada');
     if (v.estado !== 'pendiente') throw new AppError(409, `La venta está ${v.estado}`);
     if (v.metodo_pago === 'mercadopago') throw new AppError(409, 'Los pagos de MercadoPago se acreditan automáticamente');
-    const pendiente = await Pago.pendienteDeVenta(v.id_venta, 'transferencia', conn);
-    const idPago = pendiente?.id_pago || (await Pago.create({ id_venta: v.id_venta, proveedor: 'transferencia', monto: v.monto_total }, conn));
+    if (soloEfectivo && v.metodo_pago !== 'efectivo') throw new AppError(409, 'La venta no es en efectivo');
+    const proveedor = v.metodo_pago === 'efectivo' ? 'efectivo' : 'transferencia';
+    const pendiente = await Pago.pendienteDeVenta(v.id_venta, proveedor, conn);
+    const idPago = pendiente?.id_pago || (await Pago.create({ id_venta: v.id_venta, proveedor, monto: v.monto_total }, conn));
     await pagos.aprobarVenta(conn, v.id_venta, idPago, req.body.referencia || null);
+    await Pago.registrarValidacion(idPago, req.usuario.id_usuario, conn);
     return Venta.findById(v.id_venta, conn);
   });
   const whatsapp = await enviarEntradasPorWhatsapp(venta.id_venta);
-  res.json({ ...venta, whatsapp });
+  res.json({ ...venta, tickets: (await Ticket.findByVenta(venta.id_venta)).map((t) => ({ id_ticket: t.id_ticket, estado: t.estado, validado: t.estado === 'valido' })), whatsapp });
 });
+exports.confirmarPago = confirmarCobroManual();
+exports.validarEfectivo = confirmarCobroManual({ soloEfectivo: true });
 
 /** POST /api/ventas/:id/cancelar — pendiente → cancelado; pagado → reembolsado (con devolución en MercadoPago). */
 exports.cancelar = asyncHandler(async (req, res) => {

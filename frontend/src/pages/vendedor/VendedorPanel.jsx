@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { mensajeError, vendedorApi } from '../../api/client';
+import { linksPagoApi, mensajeError, vendedorApi } from '../../api/client';
+import GenerarLinkPago from '../../components/vendedor/GenerarLinkPago';
 import { Alerta, Badge, Modal, Spinner, Tabs } from '../../components/ui';
 import WhatsappInput from '../../components/WhatsappInput';
 import { fecha, importe, moneda } from '../../utils/format';
@@ -19,7 +20,8 @@ export default function VendedorPanel() {
   const [ventas, setVentas] = useState([]);
   const [eventos, setEventos] = useState([]);
   const [nuevo, setNuevo] = useState({ id_evento: '', descripcion: '' });
-  const [tab, setTab] = useState('links');
+  const [tab, setTab] = useState('cobrar');
+  const [linksPago, setLinksPago] = useState([]);
   const [error, setError] = useState('');
   const [aviso, setAviso] = useState('');
   const [envio, setEnvio] = useState(null); // { link, whatsapp, mensaje }
@@ -28,8 +30,8 @@ export default function VendedorPanel() {
 
   const cargar = async () => {
     try {
-      const [p, l, v, e] = await Promise.all([vendedorApi.perfil(), vendedorApi.links(), vendedorApi.ventas(), vendedorApi.eventos()]);
-      setPerfil(p); setLinks(l); setVentas(v); setEventos(e);
+      const [p, l, v, e, lp] = await Promise.all([vendedorApi.perfil(), vendedorApi.links(), vendedorApi.ventas(), vendedorApi.eventos(), linksPagoApi.listar()]);
+      setPerfil(p); setLinks(l); setVentas(v); setEventos(e); setLinksPago(lp);
     } catch (err) {
       setError(mensajeError(err));
     }
@@ -106,7 +108,33 @@ export default function VendedorPanel() {
         <Stat label="Visitas a mis links" valor={links.reduce((s, l) => s + l.visitas, 0)} />
       </div>
 
-      <Tabs tabs={[['links', `Mis links (${links.length})`], ['ventas', `Mis ventas (${ventas.length})`]]} activa={tab} onChange={setTab} />
+      <Tabs tabs={[['cobrar', 'Link de pago'], ['pagos', `Links de pago (${linksPago.length})`], ['links', `Links de venta (${links.length})`], ['ventas', `Mis ventas (${ventas.length})`]]} activa={tab} onChange={setTab} />
+
+      {tab === 'cobrar' && <GenerarLinkPago eventos={eventos} medios={perfil.medios_pago || []} onGenerado={cargar} />}
+
+      {tab === 'pagos' && (
+        <div className="card overflow-x-auto p-0!">
+          <table className="tabla">
+            <thead className="bg-zinc-50 dark:bg-white/5 text-left text-zinc-500 dark:text-zinc-400">
+              <tr><th className="p-3">#</th><th className="p-3">Comprador</th><th className="p-3">Evento</th><th className="p-3">Pago</th><th className="p-3">Total</th><th className="p-3">Estado</th><th className="p-3">Link</th></tr>
+            </thead>
+            <tbody className="divide-y divide-zinc-100 dark:divide-white/5">
+              {linksPago.map((l) => (
+                <tr key={l.id_venta}>
+                  <td className="p-3">{l.id_venta}<div className="text-xs text-zinc-400 dark:text-zinc-500">{fecha(l.fecha_venta)}</div></td>
+                  <td className="p-3">{l.comprador}</td>
+                  <td className="p-3">{l.evento}</td>
+                  <td className="p-3">{l.tipo_pago === 'efectivo' ? 'Efectivo' : 'MercadoPago'}</td>
+                  <td className="p-3 tabular-nums">{moneda(l.monto_total)}</td>
+                  <td className="p-3"><Badge estado={l.estado} texto={l.estado === 'pendiente' && l.tipo_pago === 'efectivo' ? 'pendiente de validación' : l.estado} /></td>
+                  <td className="p-3">{l.url && <button className="btn-secondary py-1!" onClick={() => copiar(l.url)}>Copiar</button>}</td>
+                </tr>
+              ))}
+              {linksPago.length === 0 && <tr><td colSpan={7} className="p-6 text-center text-zinc-400 dark:text-zinc-500">Todavía no generaste links de pago</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {tab === 'links' && (
         <div className="space-y-6">

@@ -90,6 +90,8 @@ export const ventasApi = {
   pagar: (id, d) => api.post(`/ventas/${id}/pagar`, d).then(datos),
   verificarPago: (id, payment_id) => api.get(`/ventas/${id}/verificar-pago`, { params: { payment_id } }).then(datos),
   confirmarPago: (id) => api.post(`/ventas/${id}/confirmar-pago`).then(datos),
+  // Pago en efectivo recibido: los tickets pasan a validados
+  validarEfectivo: (id) => api.post(`/ventas/${id}/validar-efectivo`).then(datos),
   cancelar: (id) => api.post(`/ventas/${id}/cancelar`).then(datos),
   reenviarWhatsapp: (id, whatsapp) => api.post(`/ventas/${id}/reenviar-whatsapp`, { whatsapp }).then(datos),
 };
@@ -121,9 +123,17 @@ export const vendedorApi = {
   ventas: () => api.get('/vendedor/ventas').then(datos),
 };
 
+// Links de pago que el vendedor genera para un comprador: MercadoPago (por defecto) o efectivo
+export const linksPagoApi = {
+  generar: (d) => api.post('/links/generar', d).then(datos),
+  listar: () => api.get('/links').then(datos),
+};
+
 export const publicoApi = {
   link: (codigo) => api.get(`/publico/links/${codigo}`, { headers: { 'X-Tenant': '' } }).then(datos),
   entradas: (token) => api.get(`/publico/entradas/${token}`, { headers: { 'X-Tenant': '' } }).then(datos),
+  // Vuelta de MercadoPago de un link de vendedor (el comprador no tiene sesión)
+  verificarPago: (token, payment_id) => api.get(`/publico/entradas/${token}/verificar-pago`, { params: { payment_id }, headers: { 'X-Tenant': '' } }).then(datos),
 };
 
 export const integracionesApi = {

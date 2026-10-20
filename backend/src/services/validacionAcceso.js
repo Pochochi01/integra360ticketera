@@ -39,6 +39,9 @@ async function validarCodigo({ codigo, idEvento, idTenant, idValidador }) {
       resultado = 'usado';
       fechaIngreso = t.fecha_uso;
       motivo = `Ya ingresó el ${new Date(t.fecha_uso).toLocaleString('es-AR', { dateStyle: 'short', timeStyle: 'short' })}`;
+    } else if (t.estado === 'pendiente' && t.metodo_pago === 'efectivo') {
+      resultado = 'invalido';
+      motivo = 'Pago en efectivo pendiente: el complejo todavía no validó la entrada';
     } else if (t.estado !== 'valido') {
       resultado = 'invalido';
       motivo = `Ticket en estado "${t.estado}"`;

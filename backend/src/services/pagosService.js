@@ -23,6 +23,19 @@ const metodosDisponibles = async (idTenant) => {
 };
 
 /**
+ * Medios con los que un VENDEDOR puede generar links de pago:
+ *  - mercadopago (por defecto): con la cuenta OAuth conectada y activa del complejo
+ *  - efectivo: sólo si el admin lo habilitó (tenants.efectivo_habilitado)
+ */
+const metodosVendedor = async (tenant) => {
+  const cuenta = await MercadoPagoToken.publica(tenant.id_tenant);
+  return [
+    ...(cuenta?.conectado && cuenta.activo ? ['mercadopago'] : []),
+    ...(tenant.efectivo_habilitado ? ['efectivo'] : []),
+  ];
+};
+
+/**
  * Aprueba el pago de una venta dentro de una transacción: pago → aprobado, venta → pagado, tickets → válidos.
  * Idempotente: si la venta ya estaba pagada no hace nada.
  */
@@ -36,7 +49,10 @@ const aprobarVenta = async (conn, idVenta, idPago, referencia = null) => {
   return { cambio: true, venta };
 };
 
-/** Crea (o reutiliza) la preferencia de Checkout Pro de una venta con la cuenta del tenant (ámbito = id_tenant). */
+/**
+ * Crea (o reutiliza) la preferencia de Checkout Pro de una venta con la cuenta del tenant (ámbito = id_tenant).
+ * Si la venta tiene expira_en (link de vendedor), la preferencia deja de aceptar pagos en ese momento.
+ */
 const preferenciaDeVenta = async (venta, tickets) => {
   const existente = await Pago.pendienteDeVenta(venta.id_venta, 'mercadopago');
   if (existente?.preference_id && existente.detalle) return { id_pago: existente.id_pago, ...JSON.parse(existente.detalle) };
@@ -47,14 +63,18 @@ const preferenciaDeVenta = async (venta, tickets) => {
     porTipo[t.id_tipo] ??= { title: `${venta.evento} - ${t.nombre_tipo}`, quantity: 0, unit_price: t.precio };
     porTipo[t.id_tipo].quantity++;
   }
-  const retorno = `${frontend()}/ventas/${venta.id_venta}/resultado`;
+  // Links generados por un vendedor: el comprador no tiene sesión, vuelve a la página pública de su reserva
+  const retorno = venta.expira_en && venta.id_vendedor
+    ? `${frontend()}/entrada/${venta.token_acceso}`
+    : `${frontend()}/ventas/${venta.id_venta}/resultado`;
   const pref = await conCredenciales(venta.id_tenant, (cred) => mp.crearPreferencia(cred, {
     titulo: venta.tenant,
     items: Object.values(porTipo),
     externalReference: `venta:${venta.id_venta}:pago:${idPago}`,
     notificationUrl: `${backend()}/api/pagos/webhook/mercadopago/${venta.id_tenant}`,
     backUrls: { success: retorno, pending: retorno, failure: retorno },
-    payer: { email: venta.email_comprador },
+    payer: venta.email_comprador ? { email: venta.email_comprador } : undefined,
+    expiraEn: venta.expira_en || null,
   }));
   const links = { init_point: pref.init_point, sandbox_init_point: pref.sandbox_init_point };
   await Pago.actualizar(idPago, { preference_id: pref.id, detalle: JSON.stringify(links) });
@@ -148,4 +168,4 @@ const reembolsarEnMercadoPago = async (venta) => {
   for (const p of pagos) await conCredenciales(venta.id_tenant, (cred) => mp.reembolsar(cred, p.referencia_externa));
 };
 
-module.exports = { metodosDisponibles, aprobarVenta, preferenciaDeVenta, preferenciaDeSuscripcion, procesarPagoMercadoPago, reembolsarEnMercadoPago };
+module.exports = { metodosDisponibles, metodosVendedor, aprobarVenta, preferenciaDeVenta, preferenciaDeSuscripcion, procesarPagoMercadoPago, reembolsarEnMercadoPago };

@@ -6,7 +6,7 @@ const Usuario = require('../models/Usuario');
 const { normalizarWhatsapp } = require('../utils/whatsapp');
 const { AppError } = require('../utils/errors');
 
-const { metodosDisponibles } = require('../services/pagosService');
+const { metodosDisponibles, metodosVendedor } = require('../services/pagosService');
 
 /**
  * Validación previa de una compra (falla rápido antes de abrir la transacción).
@@ -19,10 +19,15 @@ const { metodosDisponibles } = require('../services/pagosService');
  * WhatsApp: obligatorio en compras normales; se valida y normaliza a E.164.
  *
  * tipoVenta: 'normal' (usuario) | 'corporativa' | 'invitacion' (solo admin; ignoran el límite por persona)
+ *          | 'vendedor' (link de pago que genera un vendedor para un comprador: mismas reglas que 'normal',
+ *            pero el titular es req.body.id_usuario_destino, el evento debe ser del complejo del vendedor
+ *            y los medios son los habilitados para vendedores: mercadopago y, si el admin lo permite, efectivo)
  */
 const validarCompra = (tipoVenta = 'normal') => async (req, _res, next) => {
   try {
     const { id_evento, metodo_pago, items } = req.body;
+    const esVendedor = tipoVenta === 'vendedor';
+    const comoNormal = tipoVenta === 'normal' || esVendedor; // reglas de venta al público
     if (!id_evento) throw new AppError(400, 'id_evento es obligatorio');
     if (!Array.isArray(items) || items.length === 0) throw new AppError(400, 'Debe seleccionar al menos un tipo de ticket');
 
@@ -41,7 +46,7 @@ const validarCompra = (tipoVenta = 'normal') => async (req, _res, next) => {
     if (!evento) throw new AppError(404, 'Evento no encontrado');
     if (tipoVenta !== 'normal' && evento.id_tenant !== req.tenant.id_tenant) throw new AppError(404, 'Evento no encontrado');
     if (evento.estado_tenant !== 'activo') throw new AppError(409, 'El complejo no está operando');
-    const estadosVendibles = tipoVenta === 'normal' ? ['publicado'] : ['publicado', 'agotado'];
+    const estadosVendibles = comoNormal ? ['publicado'] : ['publicado', 'agotado'];
     if (!estadosVendibles.includes(evento.estado)) throw new AppError(409, `El evento no está a la venta (estado: ${evento.estado})`);
     if (new Date(evento.fecha) < new Date()) throw new AppError(409, 'El evento ya ocurrió');
 
@@ -53,8 +58,8 @@ const validarCompra = (tipoVenta = 'normal') => async (req, _res, next) => {
       const tipo = await TipoTicket.findById(item.id_tipo);
       if (!tipo || tipo.id_evento !== evento.id_evento) throw new AppError(400, `Tipo de ticket ${item.id_tipo} no pertenece al evento`);
       if (!tipo.activo) throw new AppError(409, `El tipo "${tipo.nombre_tipo}" no está disponible`);
-      if (tipo.solo_admin && tipoVenta === 'normal') throw new AppError(403, `El tipo "${tipo.nombre_tipo}" solo lo emite la organización`);
-      if (tipoVenta === 'normal') {
+      if (tipo.solo_admin && comoNormal) throw new AppError(403, `El tipo "${tipo.nombre_tipo}" solo lo emite la organización`);
+      if (comoNormal) {
         if (tipo.venta_desde && new Date(tipo.venta_desde) > ahora) throw new AppError(409, `La venta de "${tipo.nombre_tipo}" aún no comenzó`);
         if (tipo.venta_hasta && new Date(tipo.venta_hasta) < ahora) throw new AppError(409, `La venta de "${tipo.nombre_tipo}" finalizó`);
       }
@@ -83,7 +88,7 @@ const validarCompra = (tipoVenta = 'normal') => async (req, _res, next) => {
 
     // Límite por persona (solo compras de usuario). Cuenta tickets activos que ya posee (comprados o recibidos).
     const idTitular = tipoVenta === 'normal' ? req.usuario.id_usuario : Number(req.body.id_usuario_destino || req.usuario.id_usuario);
-    if (tipoVenta === 'normal' && evento.limite_por_persona) {
+    if (comoNormal && evento.limite_por_persona) {
       const yaTiene = await Ticket.contarActivosUsuarioEvento(idTitular, evento.id_evento);
       if (yaTiene + cantidadTotal > evento.limite_por_persona) {
         throw new AppError(409, `Supera el límite de ${evento.limite_por_persona} tickets por persona (ya posee ${yaTiene})`, {
@@ -93,7 +98,14 @@ const validarCompra = (tipoVenta = 'normal') => async (req, _res, next) => {
       }
     }
 
-    if (tipoVenta === 'normal') {
+    if (esVendedor) {
+      const metodos = await metodosVendedor(req.tenant);
+      if (total > 0 && !metodos.includes(metodo_pago)) {
+        throw new AppError(metodo_pago === 'efectivo' ? 403 : 409, metodo_pago === 'efectivo'
+          ? 'El complejo no tiene habilitado el pago en efectivo'
+          : 'El complejo no tiene MercadoPago conectado: pedile al administrador que lo conecte');
+      }
+    } else if (tipoVenta === 'normal') {
       const metodos = await metodosDisponibles(evento.id_tenant);
       if (total > 0 && !metodos.includes(metodo_pago)) throw new AppError(400, `Método de pago no disponible en este complejo (${metodos.join(', ')})`);
     }
@@ -114,7 +126,10 @@ const validarCompra = (tipoVenta = 'normal') => async (req, _res, next) => {
     if (!whatsapp) whatsapp = (await Usuario.findById(idTitular))?.whatsapp;
     const whatsappNormalizado = whatsapp ? normalizarWhatsapp(whatsapp, pais) : null;
     if (whatsapp && !whatsappNormalizado) throw new AppError(400, 'Número de WhatsApp inválido (debe ser un celular, ej. +54 9 11 2345 6789)');
-    if (tipoVenta === 'normal' && !whatsappNormalizado) throw new AppError(400, 'El número de WhatsApp es obligatorio para recibir las entradas');
+    if (comoNormal && !whatsappNormalizado) throw new AppError(400, 'El número de WhatsApp es obligatorio para recibir las entradas');
+
+    // El vendedor queda como canal de la venta (sin link público asociado)
+    if (esVendedor) vendedor = { id_vendedor: req.vendedor.id_vendedor, id_link: null };
 
     req.compra = {
       vendedor,
@@ -124,7 +139,7 @@ const validarCompra = (tipoVenta = 'normal') => async (req, _res, next) => {
       total,
       cantidadTotal,
       idTitular,
-      tipoVenta,
+      tipoVenta: esVendedor ? 'normal' : tipoVenta,
       metodoPago: total === 0 ? 'cortesia' : metodo_pago || 'transferencia',
     };
     next();

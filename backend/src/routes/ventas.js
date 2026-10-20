@@ -21,6 +21,8 @@ r.get('/:id', verificarToken, c.detalle);
 r.post('/:id/pagar', verificarToken, requiereRol('comprador'), seleccionarMercadoPago('venta', { soloSiLaVentaUsaMercadoPago: true }), c.pagar);
 r.get('/:id/verificar-pago', verificarToken, c.verificarPago);
 r.post('/:id/confirmar-pago', admin, c.confirmarPago);
+// Pago en efectivo recibido: habilita los tickets (validado = true)
+r.post('/:id/validar-efectivo', admin, c.validarEfectivo);
 r.post('/:id/cancelar', verificarToken, c.cancelar);
 r.post('/:id/reenviar-whatsapp', verificarToken, c.reenviarWhatsapp);
 

@@ -32,6 +32,10 @@ const Pago = {
       [estado || null, referencia_externa || null, detalle || null, preference_id || null, id]
     ),
 
+  /** Registra quién confirmó un cobro manual (efectivo / transferencia). */
+  registrarValidacion: (id, idValidador, db = pool) =>
+    db.query('UPDATE pagos SET id_validador = ?, validado_en = NOW() WHERE id_pago = ?', [idValidador, id]),
+
   /** Cierra los pagos abiertos de una venta al cancelarla / reembolsarla. */
   cerrarPorVenta: (idVenta, estadoVenta, db) =>
     db.query(

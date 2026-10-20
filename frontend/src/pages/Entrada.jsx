@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useSearchParams } from 'react-router-dom';
 import { mensajeError, publicoApi, urlUpload } from '../api/client';
 import { Alerta, Badge, Spinner } from '../components/ui';
 import { fecha } from '../utils/format';
@@ -14,9 +14,14 @@ export default function Entrada() {
   const [datos, setDatos] = useState(null);
   const [error, setError] = useState('');
 
+  const [params] = useSearchParams();
+  const paymentId = params.get('payment_id') || params.get('collection_id');
+
   useEffect(() => {
-    publicoApi.entradas(token).then(setDatos).catch((e) => setError(mensajeError(e)));
-  }, [token]);
+    // Si vuelve de MercadoPago, primero se verifica el pago con el servidor (no se confía en la URL)
+    const verificar = paymentId ? publicoApi.verificarPago(token, paymentId).catch(() => null) : Promise.resolve();
+    verificar.then(() => publicoApi.entradas(token)).then(setDatos).catch((e) => setError(mensajeError(e)));
+  }, [token, paymentId]);
 
   if (error) return <Alerta>{error}</Alerta>;
   if (!datos) return <Spinner />;
@@ -31,7 +36,9 @@ export default function Entrada() {
         <p className="mt-2 text-sm">Titular: <b>{datos.comprador}</b></p>
       </div>
 
-      {datos.estado === 'pendiente' && <Alerta tipo="info">La compra está pendiente de pago. Las entradas se habilitan cuando se acredite.</Alerta>}
+      {datos.estado === 'pendiente' && (datos.metodo_pago === 'efectivo'
+        ? <Alerta tipo="info">Reserva pendiente de pago en efectivo. Abonala al vendedor o en el complejo{datos.expira_en ? ` antes del ${fecha(datos.expira_en)}` : ''}: las entradas se habilitan cuando el complejo confirme el pago.</Alerta>
+        : <Alerta tipo="info">La compra está pendiente de pago. Las entradas se habilitan cuando se acredite.</Alerta>)}
       {['cancelado', 'reembolsado'].includes(datos.estado) && <Alerta>Esta compra fue {datos.estado}.</Alerta>}
 
       {datos.tickets.map((t, i) => (

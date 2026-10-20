@@ -61,7 +61,7 @@ const Tenant = {
   update: async (id, d) => {
     const valores = { ...d, ...(d.config || {}) };
     delete valores.config;
-    const permitidos = ['nombre', 'slug', 'email_contacto', 'telefono', 'direccion', 'estado', ...CONFIG];
+    const permitidos = ['nombre', 'slug', 'email_contacto', 'telefono', 'direccion', 'estado', 'efectivo_habilitado', ...CONFIG];
     const campos = Object.keys(valores).filter((k) => permitidos.includes(k) && valores[k] !== undefined);
     if (campos.length) {
       await pool.query(`UPDATE tenants SET ${campos.map((c) => `${c} = ?`).join(', ')} WHERE id_tenant = ?`, [

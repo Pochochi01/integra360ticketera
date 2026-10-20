@@ -1,5 +1,6 @@
 const LinkVenta = require('../models/LinkVenta');
 const Venta = require('../models/Venta');
+const { procesarPagoMercadoPago } = require('../services/pagosService');
 const Ticket = require('../models/Ticket');
 const Tenant = require('../models/Tenant');
 const { generarImagenTicket } = require('../services/ticketImagen');
@@ -57,6 +58,8 @@ exports.entradas = asyncHandler(async (req, res) => {
   res.json({
     id_venta: venta.id_venta,
     estado: venta.estado,
+    metodo_pago: venta.metodo_pago,
+    expira_en: venta.estado === 'pendiente' ? venta.expira_en : null,
     tenant: venta.tenant,
     evento: venta.evento,
     fecha_evento: venta.fecha_evento,
@@ -72,6 +75,18 @@ exports.entradas = asyncHandler(async (req, res) => {
       imagen_url: t.estado === 'valido' ? `/api/publico/entradas/${req.params.token}/tickets/${t.id_ticket}.png` : null,
     })),
   });
+});
+
+/**
+ * GET /publico/entradas/:token/verificar-pago?payment_id= — vuelta de MercadoPago de un link de vendedor.
+ * No confía en la URL: consulta el pago con la cuenta del complejo y valida que sea de esta venta.
+ */
+exports.verificarPago = asyncHandler(async (req, res) => {
+  const { venta } = await ventaPorToken(req.params.token);
+  if (venta.estado === 'pendiente' && venta.metodo_pago === 'mercadopago' && /^\d{1,20}$/.test(String(req.query.payment_id || ''))) {
+    await procesarPagoMercadoPago(venta.id_tenant, String(req.query.payment_id)).catch((e) => console.warn('[publico] verificar pago', e.message));
+  }
+  res.json({ estado: (await Venta.findById(venta.id_venta)).estado });
 });
 
 /** GET /publico/entradas/:token/tickets/:idTicket.png — imagen compuesta de una entrada válida. */

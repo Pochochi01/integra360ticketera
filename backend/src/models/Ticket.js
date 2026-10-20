@@ -9,7 +9,7 @@ const SELECT_TICKET = `
   SELECT t.id_ticket, e.id_tenant, t.id_venta, t.id_tipo, t.id_usuario, t.codigo_qr, t.estado, t.id_asiento, t.fecha_uso,
          ${ETIQUETA} AS asiento,
          tt.nombre_tipo, tt.precio, e.id_evento, e.nombre AS evento, e.fecha AS fecha_evento, e.lugar, e.estado AS estado_evento,
-         e.imagen_evento, v.estado AS estado_venta, v.id_usuario AS id_comprador,
+         e.imagen_evento, v.estado AS estado_venta, v.metodo_pago, v.id_usuario AS id_comprador,
          CONCAT_WS(' ', u.nombre, u.apellido) AS titular, u.email AS email_titular
     FROM tickets t
     JOIN tipos_ticket tt ON tt.id_tipo = t.id_tipo
