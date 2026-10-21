@@ -30,7 +30,7 @@ exports.crear = asyncHandler(async (req, res) => {
   const cuenta = await MercadoPagoToken.publica(req.tenant.id_tenant);
   res.status(201).json({
     ...link, mensaje: 'Link de venta generado',
-    aviso: cuenta?.conectado && cuenta.activo ? null : 'El complejo no tiene MercadoPago conectado: el link no va a poder cobrar hasta conectarlo',
+    aviso: cuenta?.conectado && cuenta.activo ? link.aviso : 'El complejo no tiene MercadoPago conectado: el link no va a poder cobrar hasta conectarlo',
   });
 });
 

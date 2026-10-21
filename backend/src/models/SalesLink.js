@@ -3,6 +3,9 @@ const { generarCodigoLink } = require('../utils/qr');
 
 const SELECT = `
   SELECT sl.*, tt.nombre_tipo AS tipo, tt.id_evento, e.nombre AS evento, e.fecha AS fecha_evento,
+         tt.stock_disponible AS stock_evento, tt.activo AS tipo_activo, e.estado AS estado_evento,
+         (SELECT COUNT(*) FROM tickets tk JOIN ventas v ON v.id_venta = tk.id_venta
+           WHERE tk.id_tipo = sl.id_tipo AND v.estado = 'pendiente' AND tk.estado = 'pendiente') AS reservadas_evento,
          (SELECT COUNT(*) FROM ventas_sales_link vsl JOIN ventas v ON v.id_venta = vsl.id_venta
            WHERE vsl.id_sales_link = sl.id AND v.estado = 'pagado') AS ventas_aprobadas,
          (SELECT COUNT(*) FROM ventas_sales_link vsl JOIN ventas v ON v.id_venta = vsl.id_venta

@@ -9,6 +9,15 @@ import { fecha, moneda } from '../../utils/format';
  * con precio y stock propios; el stock baja sólo cuando MercadoPago aprueba el pago.
  * Único: admite una sola venta aprobada. Reutilizable: vende hasta agotar el stock.
  */
+// Por qué el evento frena las ventas aunque el link tenga stock (el link sigue siendo el mismo al resolverlo)
+const PROBLEMAS = {
+  evento_agotado: () => 'No se vende: el tipo de entrada del evento tiene stock 0. Subí el stock en Eventos y este mismo link vuelve a vender.',
+  evento_reservado: (l) => `No se vende: el stock del evento está retenido por ${l.reservadas_evento} entrada(s) en checkouts sin pagar. Se libera solo al vencer la reserva (30 min), o subí el stock en Eventos.`,
+  evento_pasado: () => 'No se vende: el evento ya ocurrió.',
+  evento_no_publicado: () => 'No se vende: el evento no está publicado.',
+  tipo_inactivo: () => 'No se vende: el tipo de entrada está desactivado en Eventos.',
+};
+
 export default function LinksVentaAdmin() {
   const [links, setLinks] = useState([]);
   const [eventos, setEventos] = useState([]);
@@ -108,6 +117,12 @@ export default function LinksVentaAdmin() {
                   {' '}· {l.ventas_aprobadas} aprobada{l.ventas_aprobadas === 1 ? '' : 's'}{l.ventas_pendientes > 0 && ` · ${l.ventas_pendientes} pendiente${l.ventas_pendientes === 1 ? '' : 's'}`}
                 </p>
                 <code className="block truncate font-mono text-xs text-zinc-400 dark:text-zinc-500">{l.url}</code>
+                {l.activo && l.stock_disponible > 0 && l.problema && (
+                  <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">{PROBLEMAS[l.problema]?.(l)}</p>
+                )}
+                {l.activo && !l.problema && l.stock_evento < l.stock_disponible && (
+                  <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">Al evento le quedan {l.stock_evento} entradas de este tipo: el link no puede vender más que eso.</p>
+                )}
               </div>
               <div className="flex shrink-0 gap-2">
                 <button className="btn-secondary py-1!" onClick={() => copiar(l)} aria-label={`Copiar link ${l.producto}`}>

@@ -11,7 +11,11 @@ const NO_DISPONIBLE = {
   pausado: 'El complejo pausó este link de venta.',
   agotado: 'Se agotaron las entradas de este link.',
   usado: 'Este link ya fue utilizado.',
-  evento: 'El evento ya no está a la venta.',
+  evento_agotado: 'Se agotaron las entradas del evento.',
+  evento_reservado: 'Las entradas están reservadas por otras compras en curso. Probá de nuevo en unos minutos.',
+  evento_pasado: 'El evento ya ocurrió.',
+  evento_no_publicado: 'El evento no está a la venta en este momento.',
+  tipo_inactivo: 'Este tipo de entrada no está a la venta en este momento.',
 };
 
 /**

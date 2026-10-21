@@ -277,3 +277,24 @@ test('link pausado: la página lo informa y el checkout se rechaza', async () =>
   assert.equal((await checkout(link.id)).status, 409);
   assert.equal((await api('PATCH', `/ventas/link/${link.id}`, { token: datos[2].token, body: { activo: true } })).status, 404, 'otro complejo no puede tocarlo');
 });
+
+test('evento agotado con stock en el link: se informa el motivo y, al subir el stock, el MISMO link vuelve a vender', async () => {
+  const Evento = require('../src/models/Evento');
+  const { body: link } = await crearLink(1, { stock_total: 89 });
+  await pool.query('UPDATE tipos_ticket SET stock_disponible = 0 WHERE id_tipo = ?', [datos[1].id_tipo]);
+  await Evento.actualizarEstadoPorStock(datos[1].id_evento);
+
+  const agotado = await api('GET', `/publico/venta/${link.id}`);
+  assert.equal(agotado.body.disponible, false);
+  assert.ok(['evento_agotado', 'evento_reservado'].includes(agotado.body.motivo), agotado.body.motivo); // reservado: quedan checkouts sin pagar de pruebas anteriores
+  assert.equal(agotado.body.stock_disponible, 89, 'el stock del link no cambia');
+  assert.equal((await checkout(link.id)).status, 409);
+  const [enLista] = (await api('GET', '/ventas/link', { token: datos[1].token })).body.filter((l) => l.id === link.id);
+  assert.equal(enLista.problema, agotado.body.motivo, 'el admin ve por qué no vende');
+
+  // El admin sube el stock del tipo en Eventos (mismo recálculo que hace eventosController.actualizarTipo)
+  await pool.query('UPDATE tipos_ticket SET stock_disponible = 200 WHERE id_tipo = ?', [datos[1].id_tipo]);
+  await Evento.actualizarEstadoPorStock(datos[1].id_evento);
+  assert.equal((await api('GET', `/publico/venta/${link.id}`)).body.disponible, true);
+  assert.equal((await checkout(link.id)).status, 201);
+});
