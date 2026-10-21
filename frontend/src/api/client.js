@@ -123,9 +123,17 @@ export const vendedorApi = {
   ventas: () => api.get('/vendedor/ventas').then(datos),
 };
 
+// Página /checkout/:linkId (pública): datos del complejo y creación del pago en MercadoPago
+export const pagosApi = {
+  checkout: (linkId) => api.get(`/publico/checkout/${linkId}`, { headers: { 'X-Tenant': '' } }).then(datos),
+  crear: (d) => api.post('/pagos/crear', d, { headers: { 'X-Tenant': '' } }).then(datos),
+};
+
 // Links de pago que el vendedor genera para un comprador: MercadoPago (por defecto) o efectivo
 export const linksPagoApi = {
   generar: (d) => api.post('/links/generar', d).then(datos),
+  // Sin comprador: genera el link de checkout /checkout/:linkId para enviar al cliente
+  generarCheckout: ({ id_evento, id_tipo, cantidad, descripcion }) => api.post('/links/generar', { id_evento, id_tipo, cantidad, descripcion }).then(datos),
   listar: () => api.get('/links').then(datos),
 };
 

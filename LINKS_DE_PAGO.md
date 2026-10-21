@@ -139,3 +139,44 @@ Pruebas (35 verificaciones en Edge):
 - **Validaciones:** el `tenant_id` y el `seller_id` del cuerpo se rechazan si no coinciden; desde el link no se puede elegir efectivo; el email es obligatorio; un link inexistente o un pedido sin sesión ni link se rechazan.
 - **Token:** si está por vencer se renueva con el refresh token, y si fue revocado (401) se renueva y se reintenta.
 - **Diseño:** móvil en claro y oscuro.
+
+## Link de checkout del complejo (`/checkout/:linkId`)
+
+Es la opción por defecto del vendedor, en **Link de pago → «Link para el cliente»**. La otra opción, «Cargar la compra», es el flujo en el que el vendedor carga los datos del cliente.
+
+1. **El vendedor genera el link.** `POST /api/links/generar`, sin `comprador`:
+   ```json
+   { "id_evento": 3, "id_tipo": 7, "cantidad": 2, "descripcion": "opcional" }
+   ```
+   Todos los campos son opcionales. Responde `201`:
+   ```json
+   { "link_id": "qWtZBdSAm5", "url": "https://<frontend>/checkout/qWtZBdSAm5", … }
+   ```
+   - `linkId` es el código del link de venta del vendedor (`links_venta`). Identifica al vendedor y, por lo tanto, a su complejo (`tenant_id`).
+   - El link puede fijar el producto: evento, tipo de entrada y cantidad (migración 011). Si fija tipo y cantidad, el comprador no los puede cambiar y el backend los impone aunque se manden otros.
+   - No reserva nada y se puede usar muchas veces.
+2. **El comprador abre `/checkout/:linkId`.** Ve el **logo, el nombre y la dirección del complejo**, quién lo atiende, el evento y las entradas, y el formulario (nombre y apellido, email, teléfono). Los datos salen de `GET /api/publico/checkout/:linkId`. El logo se carga en **Mi complejo → Logo**.
+3. **Comprar.** `POST /api/pagos/crear`:
+   ```json
+   { "link_id": "…", "id_evento": 3, "items": [{ "id_tipo": 7, "cantidad": 2 }],
+     "comprador": { "nombre": "…", "email": "…", "telefono": "…" } }
+   ```
+   - El backend toma complejo y vendedor del link: un `tenant_id` o `seller_id` distinto se rechaza con 403.
+   - Valida la compra, reserva por 30 min y crea la preferencia con el **access token OAuth del complejo**, renovándolo si hace falta.
+   - Devuelve el `init_point` y el frontend hace `window.location.href = init_point`.
+4. **Pago y estado:**
+   - si se aprueba, vuelve a la página de la reserva con las entradas;
+   - si se rechaza, vuelve a `/checkout/:linkId?pago=rechazado` para reintentar;
+   - el webhook único (`/api/pagos/webhook`) actualiza `reservations`: `approved`, `pending` o `rejected`.
+
+Pruebas (37 verificaciones en Edge):
+
+- **El vendedor genera el link:** página del complejo con nombre, dirección y vendedor.
+- **Compra:** el formulario redirige al checkout de MercadoPago del complejo, con los datos del comprador en la preferencia.
+- **Resultado:** si se aprueba, entradas y `approved`; si se rechaza, vuelve al checkout con un aviso y la reserva queda `pending`.
+- **Webhook:** marca `approved` y `rejected`.
+- **Producto fijo:** se impone aunque se manden otros items, y se rechazan otro tipo u otra cantidad.
+- **Aislamiento:** el link de Luna muestra Boliche Luna y cobra en su cuenta. Un pago notificado con la cuenta equivocada no se acredita, y un link de Norte no vende eventos de Luna.
+- **Link pausado:** la página muestra «Link no disponible» y `/api/pagos/crear` responde 409.
+- **Token:** si está por vencer se renueva con el refresh token, y si fue revocado se renueva y se reintenta.
+- **Diseño:** móvil en claro y oscuro.

@@ -102,7 +102,7 @@ export default function AdminComplejo() {
     try {
       const t = await tenantsApi.actualizarMio({
         nombre: form.nombre, email_contacto: form.email_contacto, telefono: form.telefono, direccion: form.direccion,
-        config: { mensaje_whatsapp: form.config.mensaje_whatsapp || null, color_primario: form.config.color_primario || null },
+        config: { mensaje_whatsapp: form.config.mensaje_whatsapp || null, color_primario: form.config.color_primario || null, logo_url: form.config.logo_url || null },
       });
       setForm({ ...t, config: t.config || {} });
       setAviso('Datos guardados');
@@ -132,6 +132,14 @@ export default function AdminComplejo() {
         <div className="grid gap-3 sm:grid-cols-2">
           <div><label className="label" htmlFor="campo-admincomplejo-email-de-contacto">Email de contacto</label><input id="campo-admincomplejo-email-de-contacto" className="input" type="email" value={form.email_contacto || ''} onChange={set('email_contacto')} /></div>
           <div><label className="label" htmlFor="campo-admincomplejo-telefono">Teléfono</label><input id="campo-admincomplejo-telefono" className="input" value={form.telefono || ''} onChange={set('telefono')} /></div>
+        </div>
+        <div>
+          <label className="label" htmlFor="campo-admincomplejo-logo">Logo (URL de la imagen)</label>
+          <div className="flex items-center gap-3">
+            {form.config.logo_url && <img src={form.config.logo_url} alt="" className="h-10 w-10 shrink-0 rounded-xl object-cover ring-1 ring-zinc-900/10 dark:ring-white/10" />}
+            <input id="campo-admincomplejo-logo" className="input" type="url" placeholder="https://…/logo.png" value={form.config.logo_url || ''} onChange={setConfig('logo_url')} />
+          </div>
+          <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">Se muestra, junto al nombre y la dirección, en la página de pago de los links de tus vendedores.</p>
         </div>
         <div><label className="label" htmlFor="campo-admincomplejo-direccion">Dirección</label><input id="campo-admincomplejo-direccion" className="input" value={form.direccion || ''} onChange={set('direccion')} /></div>
       </div>

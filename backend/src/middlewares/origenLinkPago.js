@@ -30,7 +30,8 @@ const desdeLinkPublico = async (req, _res, next) => {
     if (!link || !link.activo || link.estado_vendedor !== 'activo' || link.estado_tenant !== 'activo') {
       throw new AppError(409, 'El link de venta no está activo');
     }
-    if (link.id_evento && Number(req.body.id_evento) !== link.id_evento) throw new AppError(409, 'El link de venta es de otro evento');
+    if (link.id_evento && req.body.id_evento && Number(req.body.id_evento) !== link.id_evento) throw new AppError(409, 'El link de venta es de otro evento');
+    if (link.id_evento) req.body.id_evento = link.id_evento;
     req.tenant = await Tenant.findById(link.id_tenant);
     req.vendedor = { id_vendedor: link.id_vendedor };
     req.linkVenta = link;
@@ -41,6 +42,32 @@ const desdeLinkPublico = async (req, _res, next) => {
   } catch (err) {
     next(err);
   }
+};
+
+/**
+ * Aplica el producto que fija el link (tipo de entrada y/o cantidad): el comprador no puede cambiarlo.
+ * Sólo actúa en pedidos que llegan por un link (req.linkVenta).
+ */
+const aplicarProductoDelLink = (req, _res, next) => {
+  const link = req.linkVenta;
+  if (!link) return next();
+  const items = Array.isArray(req.body.items) ? req.body.items : [];
+  if (link.id_tipo && link.cantidad) {
+    req.body.items = [{ id_tipo: link.id_tipo, cantidad: link.cantidad }];
+  } else if (link.id_tipo) {
+    if (items.some((i) => Number(i.id_tipo) !== link.id_tipo)) return next(new AppError(409, 'Este link sólo vende el tipo de entrada indicado por el vendedor'));
+  } else if (link.cantidad) {
+    const total = items.reduce((s, i) => s + Number(i.cantidad || 0), 0);
+    if (total !== link.cantidad) return next(new AppError(409, `Este link es para ${link.cantidad} entrada(s)`));
+  }
+  next();
+};
+
+/** Sólo por link de venta (página /checkout/:linkId): ignora cualquier sesión del navegador. */
+const soloLinkPublico = (req, res, next) => {
+  if (!req.body?.codigo_link && req.body?.link_id) req.body.codigo_link = req.body.link_id;
+  if (!req.body?.codigo_link) return next(new AppError(400, 'Falta el link de pago (link_id)'));
+  return desdeLinkPublico(req, res, next);
 };
 
 /** Elige la cadena según haya sesión o código de link. */
@@ -55,4 +82,4 @@ const origenLinkPago = (req, res, next) => {
   next(new AppError(401, 'Iniciá sesión como vendedor o abrí el link de venta del vendedor'));
 };
 
-module.exports = { origenLinkPago };
+module.exports = { origenLinkPago, soloLinkPublico, aplicarProductoDelLink };

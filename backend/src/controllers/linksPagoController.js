@@ -6,6 +6,7 @@ const Venta = require('../models/Venta');
 const Pago = require('../models/Pago');
 const pagos = require('../services/pagosService');
 const { MercadoPagoToken } = require('../models/MercadoPagoToken');
+const { crearLinkCheckout, datosCheckout } = require('../services/linksCheckout');
 const { ejecutarVenta, liberarVenta } = require('./ventasController');
 const { normalizarWhatsapp } = require('../utils/whatsapp');
 const { AppError, asyncHandler } = require('../utils/errors');
@@ -147,3 +148,19 @@ exports.listar = asyncHandler(async (req, res) => {
   }
   res.json(lista);
 });
+
+/**
+ * POST /api/links/generar SIN datos del comprador (vendedor con sesión) → link de checkout.
+ *   { id_evento?, id_tipo?, cantidad?, descripcion?, tenant_id?, seller_id? }
+ *   → 201 { link_id, url: https://<frontend>/checkout/:linkId, … }
+ * Con datos del comprador (body.comprador) sigue de largo: reserva + link de pago inmediato.
+ */
+exports.ramificar = asyncHandler(async (req, res, next) => {
+  if (req.body.comprador) return next();
+  if (req.origenPublico) throw new AppError(400, 'Faltan los datos del comprador');
+  const link = await crearLinkCheckout({ tenant: req.tenant, vendedor: req.vendedor, ...req.body });
+  res.status(201).json({ ...link, mensaje: 'Link de checkout generado' });
+});
+
+/** GET /api/publico/checkout/:linkId — datos de la página del complejo para el comprador. */
+exports.verCheckout = asyncHandler(async (req, res) => res.json(await datosCheckout(req.params.linkId)));

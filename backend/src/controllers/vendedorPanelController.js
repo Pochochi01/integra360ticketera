@@ -4,6 +4,7 @@ const Evento = require('../models/Evento');
 const { enmascarar, normalizarWhatsapp } = require('../utils/whatsapp');
 const { enviarLinkDeVenta } = require('../services/notificaciones');
 const chatbot = require('../services/chatbot');
+const { crearLinkCheckout, urlCheckout } = require('../services/linksCheckout');
 const { metodosVendedor } = require('../services/pagosService');
 
 const LIMITE_POR_MINUTO = 20;
@@ -16,7 +17,7 @@ const { AppError, asyncHandler } = require('../utils/errors');
  */
 
 const urlLink = (codigo) => `${(process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '')}/v/${codigo}`;
-const conUrl = (l) => ({ ...l, url: urlLink(l.codigo) });
+const conUrl = (l) => ({ ...l, url: urlLink(l.codigo), checkout_url: urlCheckout(l.codigo) });
 
 exports.perfil = asyncHandler(async (req, res) => {
   const { id_usuario, ...vendedor } = req.vendedor;
@@ -32,17 +33,13 @@ exports.perfil = asyncHandler(async (req, res) => {
 
 exports.links = asyncHandler(async (req, res) => res.json((await LinkVenta.findByVendedor(req.vendedor.id_vendedor)).map(conUrl)));
 
-/** POST /vendedor/links { id_evento?, descripcion? } — genera un link único (general o de un evento del tenant). */
+/**
+ * POST /vendedor/links { id_evento?, id_tipo?, cantidad?, descripcion? } — genera un link único (general,
+ * de un evento o de un producto concreto). Sirve como link de venta (/v/:codigo) y de checkout (/checkout/:codigo).
+ */
 exports.crearLink = asyncHandler(async (req, res) => {
-  const idEvento = req.body.id_evento ? Number(req.body.id_evento) : null;
-  if (idEvento) {
-    const evento = await Evento.findById(idEvento);
-    if (!evento || evento.id_tenant !== req.tenant.id_tenant) throw new AppError(404, 'Evento no encontrado');
-    if (!['publicado', 'agotado'].includes(evento.estado)) throw new AppError(409, 'El evento no está a la venta');
-  }
-  const descripcion = req.body.descripcion?.trim().slice(0, 120) || null;
-  const id = await LinkVenta.create({ id_vendedor: req.vendedor.id_vendedor, id_evento: idEvento, descripcion });
-  res.status(201).json(conUrl(await LinkVenta.findById(id)));
+  const link = await crearLinkCheckout({ tenant: req.tenant, vendedor: req.vendedor, ...req.body });
+  res.status(201).json(conUrl(link));
 });
 
 /** PATCH /vendedor/links/:id { activo } — pausa o reactiva un link propio. */

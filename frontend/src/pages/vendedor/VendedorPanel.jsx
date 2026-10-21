@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { linksPagoApi, mensajeError, vendedorApi } from '../../api/client';
 import GenerarLinkPago from '../../components/vendedor/GenerarLinkPago';
+import GenerarLinkCheckout from '../../components/vendedor/GenerarLinkCheckout';
 import { Alerta, Badge, Modal, Spinner, Tabs } from '../../components/ui';
 import WhatsappInput from '../../components/WhatsappInput';
 import { fecha, importe, moneda } from '../../utils/format';
@@ -22,6 +23,7 @@ export default function VendedorPanel() {
   const [nuevo, setNuevo] = useState({ id_evento: '', descripcion: '' });
   const [tab, setTab] = useState('cobrar');
   const [linksPago, setLinksPago] = useState([]);
+  const [modoCobro, setModoCobro] = useState('checkout'); // checkout (el cliente completa) | compra (la carga el vendedor)
   const [error, setError] = useState('');
   const [aviso, setAviso] = useState('');
   const [envio, setEnvio] = useState(null); // { link, whatsapp, mensaje }
@@ -110,7 +112,21 @@ export default function VendedorPanel() {
 
       <Tabs tabs={[['cobrar', 'Link de pago'], ['pagos', `Links de pago (${linksPago.length})`], ['links', `Links de venta (${links.length})`], ['ventas', `Mis ventas (${ventas.length})`]]} activa={tab} onChange={setTab} />
 
-      {tab === 'cobrar' && <GenerarLinkPago eventos={eventos} medios={perfil.medios_pago || []} onGenerado={cargar} />}
+      {tab === 'cobrar' && (
+        <div className="space-y-4">
+          <div role="radiogroup" aria-label="Tipo de link" className="inline-flex rounded-full bg-zinc-100 p-1 text-sm dark:bg-white/5">
+            {[['checkout', 'Link para el cliente'], ['compra', 'Cargar la compra']].map(([clave, texto]) => (
+              <button key={clave} type="button" role="radio" aria-checked={modoCobro === clave} onClick={() => setModoCobro(clave)}
+                className={`rounded-full px-4 py-1.5 font-medium transition-[background-color,box-shadow] duration-150 ${modoCobro === clave ? 'bg-white shadow-sm dark:bg-zinc-800' : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-white'}`}>
+                {texto}
+              </button>
+            ))}
+          </div>
+          {modoCobro === 'checkout'
+            ? <GenerarLinkCheckout eventos={eventos} mercadopago={(perfil.medios_pago || []).includes('mercadopago')} onGenerado={cargar} />
+            : <GenerarLinkPago eventos={eventos} medios={perfil.medios_pago || []} onGenerado={cargar} />}
+        </div>
+      )}
 
       {tab === 'pagos' && (
         <div className="card overflow-x-auto p-0!">
@@ -160,13 +176,14 @@ export default function VendedorPanel() {
                   <p className="font-medium">
                     {l.descripcion || 'Link'} · <span className="text-zinc-500 dark:text-zinc-400">{l.evento || 'Todos los eventos'}</span>
                   </p>
-                  <p className="truncate font-mono text-sm text-indigo-700 dark:text-indigo-300">{l.url}</p>
+                  <p className="truncate font-mono text-sm text-indigo-700 dark:text-indigo-300">{l.checkout_url}</p>
+                  {(l.tipo || l.cantidad) && <p className="text-xs text-zinc-500 dark:text-zinc-400">{l.tipo}{l.cantidad && ` · ${l.cantidad} entrada${l.cantidad === 1 ? '' : 's'}`}</p>}
                   <p className="text-xs text-zinc-400 dark:text-zinc-500">
                     {l.visitas} visitas · {l.envios_whatsapp} envíos · {l.ventas_pagadas} ventas · {importe(l.monto_vendido)} · creado {fecha(l.creado_en)}
                   </p>
                 </div>
                 <div className="flex shrink-0 flex-wrap gap-2">
-                  <button className="btn-secondary py-1!" onClick={() => copiar(l.url)} disabled={!l.activo}>Copiar</button>
+                  <button className="btn-secondary py-1!" onClick={() => copiar(l.checkout_url)} disabled={!l.activo}>Copiar</button>
                   <button className="btn-primary py-1!" onClick={() => { setEnvio({ link: l, whatsapp: '', mensaje: '' }); setWhatsappOk(null); }} disabled={!l.activo || !botDisponible}
                     title={botDisponible ? 'Enviar desde el WhatsApp del complejo' : 'El WhatsApp del complejo no está conectado'}><ChatCircleDots size={16} weight="bold" aria-hidden /> Enviar a cliente</button>
                   <button className="btn-secondary py-1!" onClick={() => compartirWhatsapp(l)} disabled={!l.activo}><ShareNetwork size={16} weight="bold" aria-hidden /> Compartir</button>

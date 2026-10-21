@@ -68,12 +68,14 @@ const preferenciaDeVenta = async (venta, tickets, { pagador } = {}) => {
   const retorno = venta.expira_en && venta.id_vendedor
     ? `${frontend()}/entrada/${venta.token_acceso}`
     : `${frontend()}/ventas/${venta.id_venta}/resultado`;
+  // Pago rechazado desde un link de checkout: vuelve al checkout para reintentar con otro medio
+  const fallo = venta.expira_en && venta.codigo_link ? `${frontend()}/checkout/${venta.codigo_link}?pago=rechazado` : retorno;
   const pref = await conCredenciales(venta.id_tenant, (cred) => mp.crearPreferencia(cred, {
     titulo: venta.tenant,
     items: Object.values(porTipo),
     externalReference: `venta:${venta.id_venta}:pago:${idPago}`,
     notificationUrl: `${backend()}/api/pagos/webhook/mercadopago/${venta.id_tenant}`,
-    backUrls: { success: retorno, pending: retorno, failure: retorno },
+    backUrls: { success: retorno, pending: retorno, failure: fallo },
     // Datos del comprador para el checkout (los del formulario si los hay; si no, los de su cuenta)
     payer: {
       name: (pagador?.nombre || venta.comprador || '').split(' ')[0] || undefined,

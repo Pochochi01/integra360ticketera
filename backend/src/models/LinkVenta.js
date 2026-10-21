@@ -2,14 +2,15 @@ const pool = require('../config/db');
 const { generarCodigoLink } = require('../utils/qr');
 
 const SELECT = `
-  SELECT l.*, e.nombre AS evento, e.fecha AS fecha_evento,
+  SELECT l.*, e.nombre AS evento, e.fecha AS fecha_evento, tt.nombre_tipo AS tipo,
          (SELECT COUNT(*) FROM ventas_link vl JOIN ventas v ON v.id_venta = vl.id_venta
            WHERE vl.id_link = l.id_link AND v.estado = 'pagado') AS ventas_pagadas,
          (SELECT COALESCE(SUM(v.monto_total),0) FROM ventas_link vl JOIN ventas v ON v.id_venta = vl.id_venta
            WHERE vl.id_link = l.id_link AND v.estado = 'pagado') AS monto_vendido,
          (SELECT COUNT(*) FROM mensajes_whatsapp m WHERE m.id_link = l.id_link AND m.estado = 'enviado') AS envios_whatsapp
     FROM links_venta l
-    LEFT JOIN eventos e ON e.id_evento = l.id_evento`;
+    LEFT JOIN eventos e ON e.id_evento = l.id_evento
+    LEFT JOIN tipos_ticket tt ON tt.id_tipo = l.id_tipo`;
 
 const LinkVenta = {
   findByVendedor: async (idVendedor) =>
@@ -33,11 +34,12 @@ const LinkVenta = {
     ))[0][0],
 
   /** Crea el link reintentando si el código aleatorio choca con uno existente. */
-  create: async ({ id_vendedor, id_evento = null, descripcion = null }, db = pool) => {
+  /** id_tipo / cantidad opcionales: fijan el producto del link de checkout. */
+  create: async ({ id_vendedor, id_evento = null, id_tipo = null, cantidad = null, descripcion = null }, db = pool) => {
     for (let intento = 0; intento < 5; intento++) {
       try {
-        const [r] = await db.query('INSERT INTO links_venta (id_vendedor, id_evento, codigo, descripcion) VALUES (?, ?, ?, ?)', [
-          id_vendedor, id_evento, generarCodigoLink(), descripcion,
+        const [r] = await db.query('INSERT INTO links_venta (id_vendedor, id_evento, id_tipo, cantidad, codigo, descripcion) VALUES (?, ?, ?, ?, ?, ?)', [
+          id_vendedor, id_evento, id_tipo, cantidad, generarCodigoLink(), descripcion,
         ]);
         return r.insertId;
       } catch (err) {
