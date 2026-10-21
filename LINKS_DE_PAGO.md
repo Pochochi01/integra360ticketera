@@ -180,3 +180,64 @@ Pruebas (37 verificaciones en Edge):
 - **Link pausado:** la página muestra «Link no disponible» y `/api/pagos/crear` responde 409.
 - **Token:** si está por vencer se renueva con el refresh token, y si fue revocado se renueva y se reintenta.
 - **Diseño:** móvil en claro y oscuro.
+
+## Links de venta del administrador (`/venta/:linkId`)
+
+El admin genera en **Ventas → Links de venta** un link para compartir en redes. Cada link vende un tipo de entrada, con precio y **stock propios**.
+
+| Modalidad | Comportamiento |
+|---|---|
+| **Reutilizable** | el comprador elige la cantidad (máx. 50 por compra). Se vende hasta que `stock_disponible` llega a 0 |
+| **Único** (`reutilizable = false`) | una sola compra de `stock_total` entradas. La primera venta aprobada lo deja en 0 y queda inválido |
+
+**El stock del link se descuenta sólo cuando MercadoPago aprueba el pago**, dentro de la misma transacción que aprueba la venta (`SalesLink.descontarPorVenta`, llamado desde `pagosService.procesarPagoMercadoPago`). Ese camino lo usan el webhook único, el webhook por complejo y la verificación al volver del checkout.
+
+- Si dos compradores pagan por el último cupo, la segunda aprobación no encuentra stock: su venta se cancela y el pago se **reembolsa automáticamente**. Así nunca se sobrevende.
+- `ventas_sales_link.stock_descontado` hace que una notificación repetida no descuente dos veces.
+- El stock del **evento** (`tipos_ticket`) se sigue reservando 30 min al crear la preferencia, como en el resto del sistema. Si el pago no llega, la reserva vence y lo devuelve.
+
+### API
+
+```http
+POST  /api/ventas/link             (admin) { id_tipo, stock_total, reutilizable?, precio?, producto?, tenant_id? }
+      → 201 { id, url: "https://<frontend>/venta/<id>", stock_total, stock_disponible, reutilizable, … }
+GET   /api/ventas/link             (admin) links del complejo con stock, ventas aprobadas y pendientes
+PATCH /api/ventas/link/:id         (admin) { activo }  pausar / reactivar
+GET   /api/ventas/link/:id/tickets (admin) compras del link: buyer_name, buyer_email, estado
+GET   /api/publico/venta/:linkId   datos de la página (complejo, producto, stock, disponible / motivo)
+POST  /api/ventas/checkout         { linkId, cantidad?, comprador: { nombre, email, telefono } } → 201 { init_point }
+```
+
+- `tenant_id` sale del JWT (admin) o del link (checkout). Si se envía uno distinto, se responde 403.
+- La preferencia se crea con el access token OAuth **del complejo dueño del link**. Si está por vencer, antes se renueva con el `refresh_token`, y ante un 401 se renueva y se reintenta.
+- `back_urls`:
+  - aprobado o pendiente → `/entrada/:token`;
+  - rechazado → `/venta/:linkId?pago=rechazado`.
+- Errores del checkout:
+  - link pausado, agotado o ya usado → 409;
+  - cantidad mayor al stock restante → 409.
+
+### Modelo de datos (migración 013)
+
+| Pedido | Implementación |
+|---|---|
+| `sales_links` (id, tenant_id, producto, precio, stock_total, stock_disponible, reutilizable) | tabla `sales_links`, más `id_tipo` (qué entrada se emite), `activo`, `creado_por` |
+| `tickets` (id, link_id, tenant_id, buyer_name, buyer_email, estado) | vista **`sales_link_tickets`** sobre `ventas` + `pagos` + `ventas_sales_link`. `estado`: `approved`, `pending`, `rejected`, `cancelled`, `refunded` |
+
+Los tickets reales con QR siguen en `tickets`, y la Portería los valida igual que siempre.
+
+### Pruebas
+
+`cd backend && npm test` corre 7 pruebas de integración contra MySQL. Usan una base aparte (`DB_NAME_TEST`, por defecto `<DB_NAME>_test`) que se recrea con `migrate --fresh` + `seed`, y simulan MercadoPago a nivel de servicio:
+
+- **Link único:** admite una sola venta aprobada; la segunda se reembolsa y el link queda inválido.
+- **Link reutilizable:**
+  - vende hasta agotar el stock;
+  - un pago por más del stock restante se reembolsa;
+  - `rejected` y `pending` no descuentan;
+  - una notificación repetida no descuenta dos veces.
+- **Stock:** crear la preferencia no lo descuenta.
+- **Cuenta correcta:** la preferencia usa el token del complejo dueño del link. Un pago notificado con la cuenta del otro complejo se ignora.
+- **Webhook por complejo:** actualiza la vista `sales_link_tickets`, el stock y emite los tickets.
+- **Token por vencer:** se renueva con el `refresh_token`.
+- **Link pausado:** la página lo informa y el checkout se rechaza. Otro complejo no puede modificar el link.

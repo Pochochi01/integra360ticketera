@@ -4,9 +4,19 @@ const { staff } = require('../middlewares/tenant');
 const { validarCompra } = require('../middlewares/validarCompra');
 const { seleccionarMercadoPago } = require('../middlewares/integraciones');
 const c = require('../controllers/ventasController');
+const links = require('../controllers/salesLinksController');
+const { resolverComprador } = require('../controllers/linksPagoController');
 
 const r = Router();
 const admin = staff('admin');
+
+// Links de venta del admin (/venta/:linkId) con stock propio, compartibles en redes
+r.post('/link', admin, links.crear);
+r.get('/link', admin, links.listar);
+r.patch('/link/:id', admin, links.actualizar);
+r.get('/link/:id/tickets', admin, links.tickets);
+// Comprador sin cuenta desde /venta/:linkId → init_point del MercadoPago del complejo (no descuenta stock)
+r.post('/checkout', links.cargarLink, resolverComprador, validarCompra('link'), links.checkout);
 
 // Compra del comprador (opcionalmente desde un link de vendedor: body.codigo_link)
 r.post('/', verificarToken, requiereRol('comprador'), validarCompra('normal'), c.crear);

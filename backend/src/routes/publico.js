@@ -7,6 +7,8 @@ const r = Router();
 r.get('/links/:codigo', c.resolverLink);
 // Página del complejo para el link de checkout del vendedor
 r.get('/checkout/:linkId', verCheckout);
+// Página del link de venta del admin
+r.get('/venta/:linkId', require('../controllers/salesLinksController').verPublico);
 r.get('/entradas/:token', c.entradas);
 r.get('/entradas/:token/verificar-pago', c.verificarPago);
 r.get('/entradas/:token/tickets/:idTicket.png', c.imagenEntrada);

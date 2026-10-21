@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { mensajeError, vendedoresApi, ventasApi } from '../../api/client';
 import { Alerta, Badge, Spinner, useConfirmar } from '../../components/ui';
 import { fecha, importe, moneda } from '../../utils/format';
+import LinksVentaAdmin from '../../components/admin/LinksVentaAdmin';
 import { Handshake, Money, PaperPlaneTilt, WhatsappLogo } from '@phosphor-icons/react';
 
 export default function AdminVentas() {
@@ -56,6 +57,8 @@ export default function AdminVentas() {
       </div>
       <Alerta onClose={() => setError('')}>{error}</Alerta>
       <Alerta tipo="exito" onClose={() => setAviso('')}>{aviso}</Alerta>
+
+      <LinksVentaAdmin />
 
       {/* Reservas en efectivo: sus tickets no sirven para ingresar hasta que el admin valida el cobro */}
       {efectivo.length > 0 && (

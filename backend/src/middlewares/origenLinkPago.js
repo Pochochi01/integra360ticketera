@@ -82,4 +82,4 @@ const origenLinkPago = (req, res, next) => {
   next(new AppError(401, 'Iniciá sesión como vendedor o abrí el link de venta del vendedor'));
 };
 
-module.exports = { origenLinkPago, soloLinkPublico, aplicarProductoDelLink };
+module.exports = { origenLinkPago, soloLinkPublico, aplicarProductoDelLink, limitarPorIp };

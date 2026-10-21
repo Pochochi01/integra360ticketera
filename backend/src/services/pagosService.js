@@ -2,6 +2,7 @@ const pool = require('../config/db');
 const Pago = require('../models/Pago');
 const Venta = require('../models/Venta');
 const Ticket = require('../models/Ticket');
+const SalesLink = require('../models/SalesLink');
 const { MercadoPagoToken } = require('../models/MercadoPagoToken');
 const { conCredenciales } = require('./mercadopagoTokens');
 const { Suscripcion } = require('../models/Suscripcion');
@@ -53,8 +54,9 @@ const aprobarVenta = async (conn, idVenta, idPago, referencia = null) => {
 /**
  * Crea (o reutiliza) la preferencia de Checkout Pro de una venta con la cuenta del tenant (ámbito = id_tenant).
  * Si la venta tiene expira_en (link de vendedor), la preferencia deja de aceptar pagos en ese momento.
+ * retorno / fallo: back_urls propias (links del admin: /entrada/:token y /venta/:linkId).
  */
-const preferenciaDeVenta = async (venta, tickets, { pagador } = {}) => {
+const preferenciaDeVenta = async (venta, tickets, { pagador, retorno: retornoPropio, fallo: falloPropio } = {}) => {
   const existente = await Pago.pendienteDeVenta(venta.id_venta, 'mercadopago');
   if (existente?.preference_id && existente.detalle) return { id_pago: existente.id_pago, ...JSON.parse(existente.detalle) };
 
@@ -65,11 +67,11 @@ const preferenciaDeVenta = async (venta, tickets, { pagador } = {}) => {
     porTipo[t.id_tipo].quantity++;
   }
   // Links generados por un vendedor: el comprador no tiene sesión, vuelve a la página pública de su reserva
-  const retorno = venta.expira_en && venta.id_vendedor
+  const retorno = retornoPropio || (venta.expira_en && venta.id_vendedor
     ? `${frontend()}/entrada/${venta.token_acceso}`
-    : `${frontend()}/ventas/${venta.id_venta}/resultado`;
+    : `${frontend()}/ventas/${venta.id_venta}/resultado`);
   // Pago rechazado desde un link de checkout: vuelve al checkout para reintentar con otro medio
-  const fallo = venta.expira_en && venta.codigo_link ? `${frontend()}/checkout/${venta.codigo_link}?pago=rechazado` : retorno;
+  const fallo = falloPropio || (venta.expira_en && venta.codigo_link ? `${frontend()}/checkout/${venta.codigo_link}?pago=rechazado` : retorno);
   const pref = await conCredenciales(venta.id_tenant, (cred) => mp.crearPreferencia(cred, {
     titulo: venta.tenant,
     items: Object.values(porTipo),
@@ -143,6 +145,15 @@ const procesarPagoMercadoPago = async (ambito, paymentId) => {
           await Pago.actualizar(idPago, { estado: 'aprobado', referencia_externa: String(pagoMp.id), detalle: 'Pago tardío: se reembolsa' }, conn);
           reembolsoTardio = { idPago, paymentId: String(pagoMp.id) };
           return { tipo, id: venta.id_venta, estado: 'reembolsado' };
+        }
+        // Link de venta del admin: su stock se descuenta recién ahora, con el pago confirmado por MercadoPago.
+        // Si otra compra aprobada se llevó el último cupo (o el link único ya se usó), se cancela y reembolsa.
+        if (venta.estado === 'pendiente' && (await SalesLink.descontarPorVenta(conn, venta.id_venta)) === false) {
+          const { liberarVenta } = require('../controllers/ventasController'); // diferido: dependencia circular
+          await liberarVenta(conn, venta, 'cancelado');
+          await Pago.actualizar(idPago, { estado: 'aprobado', referencia_externa: String(pagoMp.id), detalle: 'Link agotado: se reembolsa' }, conn);
+          reembolsoTardio = { idPago, paymentId: String(pagoMp.id) };
+          return { tipo, id: venta.id_venta, estado: 'reembolsado', motivo: 'Link agotado' };
         }
         const r = await aprobarVenta(conn, venta.id_venta, idPago, String(pagoMp.id));
         if (r.cambio) enviarWhatsapp = venta.id_venta;

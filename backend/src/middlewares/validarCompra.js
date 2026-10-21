@@ -22,12 +22,15 @@ const { metodosDisponibles, metodosVendedor } = require('../services/pagosServic
  *          | 'vendedor' (link de pago que genera un vendedor para un comprador: mismas reglas que 'normal',
  *            pero el titular es req.body.id_usuario_destino, el evento debe ser del complejo del vendedor
  *            y los medios son los habilitados para vendedores: mercadopago y, si el admin lo permite, efectivo)
+ *          | 'link' (sales_link del admin, sin vendedor: reglas de 'normal', titular = id_usuario_destino,
+ *            evento del complejo del link y sólo MercadoPago del complejo)
  */
 const validarCompra = (tipoVenta = 'normal') => async (req, _res, next) => {
   try {
     const { id_evento, metodo_pago, items } = req.body;
     const esVendedor = tipoVenta === 'vendedor';
-    const comoNormal = tipoVenta === 'normal' || esVendedor; // reglas de venta al público
+    const esLink = tipoVenta === 'link';
+    const comoNormal = tipoVenta === 'normal' || esVendedor || esLink; // reglas de venta al público
     if (!id_evento) throw new AppError(400, 'id_evento es obligatorio');
     if (!Array.isArray(items) || items.length === 0) throw new AppError(400, 'Debe seleccionar al menos un tipo de ticket');
 
@@ -105,7 +108,7 @@ const validarCompra = (tipoVenta = 'normal') => async (req, _res, next) => {
           ? 'El complejo no tiene habilitado el pago en efectivo'
           : 'El complejo no tiene MercadoPago conectado: pedile al administrador que lo conecte');
       }
-    } else if (tipoVenta === 'normal') {
+    } else if (tipoVenta === 'normal' || esLink) {
       const metodos = await metodosDisponibles(evento.id_tenant);
       if (total > 0 && !metodos.includes(metodo_pago)) throw new AppError(400, `Método de pago no disponible en este complejo (${metodos.join(', ')})`);
     }
@@ -139,7 +142,7 @@ const validarCompra = (tipoVenta = 'normal') => async (req, _res, next) => {
       total,
       cantidadTotal,
       idTitular,
-      tipoVenta: esVendedor ? 'normal' : tipoVenta,
+      tipoVenta: esVendedor || esLink ? 'normal' : tipoVenta,
       metodoPago: total === 0 ? 'cortesia' : metodo_pago || 'transferencia',
     };
     next();

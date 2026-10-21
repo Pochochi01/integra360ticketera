@@ -19,6 +19,7 @@ import AdminIntegraciones from './pages/admin/AdminIntegraciones';
 import SuperPlataforma from './pages/super/SuperPlataforma';
 import Porteria from './pages/Porteria';
 import Checkout from './pages/Checkout';
+import VentaLink from './pages/VentaLink';
 import AvisoActualizacion from './components/AvisoActualizacion';
 import VendedorPanel from './pages/vendedor/VendedorPanel';
 import AdminEventos from './pages/admin/AdminEventos';
@@ -94,6 +95,7 @@ export default function App() {
           <Route path="/v/:codigo" element={<LinkVenta />} />
           {/* Link de pago del vendedor: página del complejo + formulario del comprador */}
           <Route path="/checkout/:linkId" element={<Checkout />} />
+          <Route path="/venta/:linkId" element={<VentaLink />} />
           <Route path="/entrada/:token" element={<Entrada />} />
           <Route path="/login" element={<Login />} />
           <Route path="/registro" element={<Registro />} />

@@ -129,6 +129,16 @@ export const pagosApi = {
   crear: (d) => api.post('/pagos/crear', d, { headers: { 'X-Tenant': '' } }).then(datos),
 };
 
+// Links de venta del admin con stock propio (/venta/:linkId). El stock baja sólo con el pago aprobado.
+export const salesLinksApi = {
+  crear: (d) => api.post('/ventas/link', d).then(datos),
+  listar: () => api.get('/ventas/link').then(datos),
+  actualizar: (id, d) => api.patch(`/ventas/link/${id}`, d).then(datos),
+  tickets: (id) => api.get(`/ventas/link/${id}/tickets`).then(datos),
+  publico: (linkId) => api.get(`/publico/venta/${linkId}`, { headers: { 'X-Tenant': '' } }).then(datos),
+  checkout: (d) => api.post('/ventas/checkout', d, { headers: { 'X-Tenant': '' } }).then(datos),
+};
+
 // Links de pago que el vendedor genera para un comprador: MercadoPago (por defecto) o efectivo
 export const linksPagoApi = {
   generar: (d) => api.post('/links/generar', d).then(datos),
