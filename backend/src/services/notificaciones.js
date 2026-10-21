@@ -22,7 +22,7 @@ const enviarYRegistrar = async ({ idTenant, tipo, idVenta = null, idLink = null,
     const { id } = await canal.enviar(destino, { cuerpo, link });
     await pool.query(
       "INSERT INTO mensajes_whatsapp (id_tenant, tipo, id_venta, id_link, destino, cuerpo, proveedor, estado, id_externo) VALUES (?, ?, ?, ?, ?, ?, ?, 'enviado', ?)",
-      [idTenant, tipo, idVenta, idLink, destino, cuerpo, canal.provider, id]
+      [idTenant, tipo, idVenta, idLink, destino, cuerpo, canal.provider, id ? String(id).slice(0, 255) : null]
     );
     return { enviado: true, provider: canal.provider };
   } catch (err) {
