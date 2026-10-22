@@ -21,6 +21,24 @@
   html {
     scroll-behavior: smooth;
     -webkit-tap-highlight-color: transparent;
+    /* sin inflado de fuente al girar el celular */
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+  /* Controles táctiles: click inmediato (sin la espera del doble toque) y sin seleccionar el texto al mantener */
+  button, [role="button"], summary, label:has(> input[type="radio"]), label:has(> input[type="checkbox"]) {
+    touch-action: manipulation;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  a {
+    touch-action: manipulation;
+  }
+  /* iOS hace zoom al enfocar un campo con letra menor a 16px y no vuelve: en pantallas táctiles, 16px */
+  @media (pointer: coarse) {
+    input, select, textarea {
+      font-size: 16px !important;
+    }
   }
   @media (prefers-reduced-motion: reduce) {
     html {
@@ -73,12 +91,45 @@
   @apply rounded-2xl bg-white p-5 ring-1 ring-zinc-900/5 shadow-[0_1px_2px_rgb(24_24_27/0.04),0_8px_24px_-12px_rgb(24_24_27/0.08)]
     dark:bg-zinc-900 dark:ring-white/10 dark:shadow-none;
 }
-/* Tablas de los paneles */
+/* Tablas de los paneles (en celulares se apilan como tarjetas: ver más abajo) */
 @utility tabla {
   @apply w-full text-sm tabular-nums
     [&_thead]:bg-zinc-50 [&_thead]:text-left [&_thead]:text-xs [&_thead]:font-medium [&_thead]:text-zinc-500
     dark:[&_thead]:bg-white/5 dark:[&_thead]:text-zinc-400
     [&_tbody_tr]:transition-colors [&_tbody_tr]:duration-150 [&_tbody_tr:hover]:bg-zinc-50/70 dark:[&_tbody_tr:hover]:bg-white/3;
+}
+
+/*
+ * Tablas en celulares (< 640px): cada fila es un bloque y cada celda «Etiqueta ··· valor».
+ * Las etiquetas (data-label) las copia utils/tablasResponsivas.js desde el <thead>. Fuera de las capas de
+ * Tailwind a propósito: tiene que ganarle a los p-3 / whitespace-nowrap de cada celda.
+ */
+@media (max-width: 639.98px) {
+  table.tabla thead { display: none; }
+  table.tabla, table.tabla tbody, table.tabla tr { display: block; width: 100%; }
+  table.tabla tbody tr { padding: 0.75rem 1rem; }
+  table.tabla tbody tr + tr { border-top: 1px solid rgb(24 24 27 / 0.06); }
+  .dark table.tabla tbody tr + tr { border-top-color: rgb(255 255 255 / 0.06); }
+  table.tabla td {
+    display: flex; align-items: baseline; justify-content: space-between; gap: 1rem;
+    padding: 0.2rem 0 !important; text-align: right; white-space: normal !important; min-width: 0;
+  }
+  table.tabla td > * { min-width: 0; overflow-wrap: anywhere; }
+  table.tabla td[data-label]::before {
+    content: attr(data-label); flex-shrink: 0; text-align: left;
+    font-size: 0.75rem; font-weight: 500; color: rgb(113 113 122);
+  }
+  /* Primera celda = título de la tarjeta; sin etiqueta (acciones) o con colspan (vacío) = ancho completo */
+  table.tabla td:first-child { display: block; text-align: left; font-weight: 600; }
+  table.tabla td:first-child::before { display: none; }
+  table.tabla td:not([data-label]), table.tabla td[colspan] { display: flex; justify-content: flex-start; flex-wrap: wrap; text-align: left; padding-top: 0.5rem !important; }
+  table.tabla td[colspan] { justify-content: center; }
+}
+
+/* Contenedores con scroll propio (modales, menú móvil): no arrastran la página al llegar al borde */
+.scroll-contenido {
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 /* Inicio: inclinación 3D de las categorías, sólo con puntero fino y sin movimiento reducido */

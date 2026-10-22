@@ -12,6 +12,7 @@ router.use('/tenants', require('./tenants'));
 router.use('/usuarios', require('./usuarios'));
 router.use('/eventos', require('./eventos'));
 router.use('/ventas', require('./ventas'));
+router.use('/admin', require('./admin'));
 router.use('/tickets', require('./tickets'));
 router.use('/vendedores', require('./vendedores'));
 router.use('/vendedor', require('./vendedor'));

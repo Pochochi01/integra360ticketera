@@ -72,7 +72,7 @@ export default function App() {
   const pantallaCompleta = pathname === '/';
   const reducir = useReducedMotion();
   return (
-    <div className="min-h-screen">
+    <div className="min-h-svh">
       <a href="#contenido" className="sr-only z-50 rounded-full bg-indigo-600 px-4 py-2 text-sm font-medium text-white focus:not-sr-only focus:fixed focus:left-4 focus:top-3">
         Saltar al contenido
       </a>
@@ -85,7 +85,7 @@ export default function App() {
         // Al terminar se quita el transform: si quedara aplicado, los modales (position: fixed) se ubicarían respecto de <main>
         animate={{ opacity: 1, transform: 'translateY(0px)', transitionEnd: { transform: 'none' } }}
         transition={{ duration: 0.2, ease: [0.23, 1, 0.32, 1] }}
-        className={pantallaCompleta ? '' : 'mx-auto max-w-6xl px-4 pb-16 pt-8'}
+        className={pantallaCompleta ? '' : 'mx-auto max-w-6xl px-4 pb-[calc(4rem+env(safe-area-inset-bottom))] pt-6 sm:px-6 sm:pt-8 lg:px-8'}
       >
         <Routes>
           {/* Público / comprador */}

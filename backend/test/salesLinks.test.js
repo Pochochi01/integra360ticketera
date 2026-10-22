@@ -298,3 +298,75 @@ test('evento agotado con stock en el link: se informa el motivo y, al subir el s
   assert.equal((await api('GET', `/publico/venta/${link.id}`)).body.disponible, true);
   assert.equal((await checkout(link.id)).status, 201);
 });
+
+// ── Estadísticas del evento (GET /api/admin/event/:id/stats) ────────────────────────────────────
+
+/** Cálculo independiente (JS sobre filas crudas) para comparar con el endpoint. */
+const esperado = async (idEvento) => {
+  const [filas] = await pool.query(
+    `SELECT v.id_venta, v.estado, v.monto_total, v.id_vendedor, vsl.id_sales_link,
+            (SELECT COUNT(*) FROM tickets t WHERE t.id_venta = v.id_venta AND t.estado NOT IN ('cancelado','reembolsado')) AS unidades
+       FROM ventas v LEFT JOIN ventas_sales_link vsl ON vsl.id_venta = v.id_venta WHERE v.id_evento = ?`, [idEvento]);
+  const pagadas = filas.filter((f) => f.estado === 'pagado' && f.unidades > 0);
+  const canales = {};
+  for (const f of pagadas) {
+    const k = f.id_vendedor ? `vendedor:${f.id_vendedor}` : f.id_sales_link ? `link:${f.id_sales_link}` : 'directa';
+    canales[k] ??= { unidades: 0, monto: 0 };
+    canales[k].unidades += Number(f.unidades);
+    canales[k].monto += Number(f.monto_total);
+  }
+  return {
+    unidades: pagadas.reduce((s, f) => s + Number(f.unidades), 0),
+    ingresos: pagadas.reduce((s, f) => s + Number(f.monto_total), 0),
+    pendientes: filas.filter((f) => f.estado === 'pendiente' && f.unidades > 0).length,
+    canales,
+  };
+};
+const stats = (tenant, idEvento = datos[tenant].id_evento, token = datos[tenant].token) => api('GET', `/admin/event/${idEvento}/stats`, { token });
+
+test('estadísticas: sólo administradores del complejo', async () => {
+  assert.equal((await api('GET', `/admin/event/${datos[1].id_evento}/stats`)).status, 401);
+  const comprador = jwt.sign({ id_usuario: 1, rol: 'comprador', id_tenant: null }, process.env.JWT_SECRET);
+  assert.equal((await stats(1, datos[1].id_evento, comprador)).status, 403);
+  assert.equal((await stats(2, datos[1].id_evento)).status, 404, 'el admin de otro complejo no ve el evento');
+});
+
+test('estadísticas: datos del evento y totales/por vendedor coinciden con la base', async () => {
+  const r = await stats(1);
+  assert.equal(r.status, 200);
+  const [[ev]] = await pool.query('SELECT nombre, lugar FROM eventos WHERE id_evento = ?', [datos[1].id_evento]);
+  const [[stock]] = await pool.query('SELECT SUM(stock_total) AS total, SUM(stock_disponible) AS disp FROM tipos_ticket WHERE id_evento = ?', [datos[1].id_evento]);
+  assert.equal(r.body.evento.nombre, ev.nombre);
+  assert.equal(r.body.evento.lugar, ev.lugar);
+  assert.equal(r.body.evento.stock_total, Number(stock.total));
+  assert.equal(r.body.evento.stock_disponible, Number(stock.disp));
+
+  const e = await esperado(datos[1].id_evento);
+  assert.ok(e.unidades > 0, 'las pruebas anteriores dejaron ventas aprobadas');
+  assert.equal(r.body.generales.unidades, e.unidades);
+  assert.equal(r.body.generales.ingresos, e.ingresos);
+  assert.equal(r.body.generales.pendientes.ventas, e.pendientes);
+  assert.equal(r.body.por_vendedor.length, Object.keys(e.canales).length);
+  for (const c of r.body.por_vendedor) assert.deepEqual({ unidades: c.unidades, monto: c.monto }, e.canales[c.clave], c.clave);
+  assert.equal(r.body.por_vendedor.reduce((s, c) => s + c.monto, 0), r.body.generales.ingresos, 'la suma por canal da el total');
+  assert.equal(r.body.por_tipo.reduce((s, t) => s + t.unidades, 0), e.unidades);
+  assert.ok(Array.isArray(r.body.por_dia) && Array.isArray(r.body.por_metodo));
+});
+
+test('estadísticas: reflejan el pago cuando MercadoPago lo aprueba (no antes)', async () => {
+  const antes = (await stats(2)).body;
+  const { body: link } = await crearLink(2, { stock_total: 5, precio: 1000 });
+  await checkout(link.id, { cantidad: 2 });
+  const pendiente = (await stats(2)).body;
+  assert.equal(pendiente.generales.ingresos, antes.generales.ingresos, 'un checkout sin pagar no suma ingresos');
+  assert.equal(pendiente.generales.pendientes.ventas, antes.generales.pendientes.ventas + 1);
+
+  await webhook(pagar(ultimaPreferencia()), datos[2].mpUser);
+  const despues = (await stats(2)).body;
+  assert.equal(despues.generales.unidades, antes.generales.unidades + 2);
+  assert.equal(despues.generales.ingresos, antes.generales.ingresos + 2000);
+  assert.equal(despues.generales.ingresos_mercadopago, antes.generales.ingresos_mercadopago + 2000);
+  const canal = despues.por_vendedor.find((c) => c.clave === `link:${link.id}`);
+  assert.deepEqual({ unidades: canal.unidades, monto: canal.monto }, { unidades: 2, monto: 2000 });
+  assert.equal(despues.por_metodo.find((m) => m.metodo === 'mercadopago').monto, despues.generales.ingresos_mercadopago);
+});

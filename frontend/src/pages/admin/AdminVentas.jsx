@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
-import { mensajeError, vendedoresApi, ventasApi } from '../../api/client';
+import { eventosApi, mensajeError, urlUpload, vendedoresApi, ventasApi } from '../../api/client';
 import { Alerta, Badge, Spinner, useConfirmar } from '../../components/ui';
 import { fecha, importe, moneda } from '../../utils/format';
 import LinksVentaAdmin from '../../components/admin/LinksVentaAdmin';
-import { Handshake, Money, PaperPlaneTilt, WhatsappLogo } from '@phosphor-icons/react';
+import EventStatsModal, { Actualizado, REFRESCO_MS, useEstadisticasEvento } from '../../components/admin/EventStatsModal';
+import { CalendarBlank, ChartBar, Handshake, MapPin, Money, PaperPlaneTilt, WhatsappLogo } from '@phosphor-icons/react';
 
 export default function AdminVentas() {
   const confirmar = useConfirmar();
@@ -11,16 +12,28 @@ export default function AdminVentas() {
   const [efectivo, setEfectivo] = useState([]);
   const [vendedores, setVendedores] = useState([]);
   const [filtros, setFiltros] = useState({ estado: '', id_vendedor: '' });
+  const [eventos, setEventos] = useState([]);
+  const [idEvento, setIdEvento] = useState('');
+  const [statsAbierto, setStatsAbierto] = useState(false);
+  const estadisticas = useEstadisticasEvento(idEvento);
   const [error, setError] = useState('');
   const [aviso, setAviso] = useState('');
 
   const cargar = () =>
     Promise.all([
-      ventasApi.listar({ estado: filtros.estado || undefined, id_vendedor: filtros.id_vendedor || undefined }).then(setVentas),
+      ventasApi.listar({ estado: filtros.estado || undefined, id_vendedor: filtros.id_vendedor || undefined, id_evento: idEvento || undefined }).then(setVentas),
       ventasApi.listar({ metodo_pago: 'efectivo', estado: 'pendiente' }).then(setEfectivo),
     ]).catch((e) => setError(mensajeError(e)));
-  useEffect(() => { cargar(); }, [filtros]);
-  useEffect(() => { vendedoresApi.listar().then(setVendedores).catch(() => {}); }, []);
+  useEffect(() => { cargar(); }, [filtros, idEvento]);
+  // Mismo ritmo que las estadísticas: los pagos que confirma MercadoPago aparecen solos en la lista
+  useEffect(() => {
+    const id = setInterval(() => document.visibilityState === 'visible' && cargar(), REFRESCO_MS);
+    return () => clearInterval(id);
+  }, [filtros, idEvento]);
+  useEffect(() => {
+    vendedoresApi.listar().then(setVendedores).catch(() => {});
+    eventosApi.listarTodos().then((evs) => setEventos([...evs].sort((a, b) => new Date(b.fecha) - new Date(a.fecha)))).catch(() => {});
+  }, []);
 
   const accion = async (fn, exito) => {
     setError('');
@@ -38,25 +51,64 @@ export default function AdminVentas() {
 
   return (
     <>
-      <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+      <div className="mb-4">
         <div>
           <h1 className="text-3xl font-semibold tracking-tight">Ventas</h1>
           <p className="text-sm text-zinc-500 dark:text-zinc-400">{ventas.length} ventas · recaudado {importe(recaudado)}</p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <select className="input w-auto!" value={filtros.id_vendedor} onChange={(e) => setFiltros({ ...filtros, id_vendedor: e.target.value })}>
-            <option value="">Todos los canales</option>
-            <option value="ninguno">Venta directa (sin vendedor)</option>
-            {vendedores.map((v) => <option key={v.id_vendedor} value={v.id_vendedor}>{v.apellido}, {v.nombre}</option>)}
-          </select>
-          <select className="input w-auto!" value={filtros.estado} onChange={(e) => setFiltros({ ...filtros, estado: e.target.value })}>
-            <option value="">Todos los estados</option>
-            {['pendiente', 'pagado', 'cancelado', 'reembolsado'].map((e) => <option key={e}>{e}</option>)}
-          </select>
-        </div>
       </div>
       <Alerta onClose={() => setError('')}>{error}</Alerta>
       <Alerta tipo="exito" onClose={() => setAviso('')}>{aviso}</Alerta>
+
+      {/* Evento seleccionado: datos principales y acceso a las estadísticas */}
+      <section className="card mb-6 space-y-4" aria-labelledby="titulo-evento-ventas">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+          <div className="min-w-0 flex-1">
+            <label id="titulo-evento-ventas" className="label" htmlFor="ventas-evento">Evento</label>
+            <select id="ventas-evento" className="input" value={idEvento} onChange={(e) => setIdEvento(e.target.value)}>
+              <option value="">Todos los eventos</option>
+              {eventos.map((ev) => <option key={ev.id_evento} value={ev.id_evento}>{ev.nombre} · {fecha(ev.fecha)}{ev.estado !== 'publicado' ? ` (${ev.estado})` : ''}</option>)}
+            </select>
+          </div>
+          {idEvento && (
+            <button className="btn-primary shrink-0" onClick={() => setStatsAbierto(true)} data-testid="boton-estadisticas">
+              <ChartBar size={18} weight="bold" aria-hidden /> Estadísticas
+            </button>
+          )}
+        </div>
+        {idEvento && (estadisticas.stats ? (
+          <div className="flex flex-col gap-4 sm:flex-row" data-testid="resumen-evento">
+            {estadisticas.stats.evento.imagen_evento && <img src={urlUpload(estadisticas.stats.evento.imagen_evento)} alt="" className="aspect-[16/9] w-full rounded-xl object-cover sm:w-48" />}
+            <div className="min-w-0 flex-1 space-y-3">
+              <div>
+                <p className="flex flex-wrap items-center gap-2 text-lg font-semibold">{estadisticas.stats.evento.nombre} <Badge estado={estadisticas.stats.evento.estado} /></p>
+                <p className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-sm text-zinc-500 dark:text-zinc-400">
+                  <span className="flex items-center gap-1.5"><CalendarBlank size={16} weight="duotone" aria-hidden /> {fecha(estadisticas.stats.evento.fecha)}</span>
+                  {estadisticas.stats.evento.lugar && <span className="flex items-center gap-1.5"><MapPin size={16} weight="duotone" aria-hidden /> {estadisticas.stats.evento.lugar}</span>}
+                </p>
+              </div>
+              <dl className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
+                {[
+                  ['Vendidas', estadisticas.stats.generales.unidades],
+                  ['Stock disponible', `${estadisticas.stats.evento.stock_disponible} / ${estadisticas.stats.evento.stock_total}`],
+                  ['Ingresos', importe(estadisticas.stats.generales.ingresos)],
+                  ['Pagos en curso', estadisticas.stats.generales.pendientes.ventas],
+                ].map(([t, v]) => (
+                  <div key={t} className="rounded-xl bg-zinc-50 px-3 py-2 dark:bg-white/5">
+                    <dt className="text-xs text-zinc-500 dark:text-zinc-400">{t}</dt>
+                    <dd className="font-semibold tabular-nums">{v}</dd>
+                  </div>
+                ))}
+              </dl>
+              <Actualizado en={estadisticas.stats.actualizado_en} cargando={estadisticas.cargando} onActualizar={estadisticas.actualizar} />
+            </div>
+          </div>
+        ) : estadisticas.error ? <Alerta>{estadisticas.error}</Alerta> : <Spinner />)}
+      </section>
+
+      {statsAbierto && idEvento && (
+        <EventStatsModal {...estadisticas} onActualizar={estadisticas.actualizar} onClose={() => setStatsAbierto(false)} />
+      )}
 
       <LinksVentaAdmin />
 
@@ -94,6 +146,20 @@ export default function AdminVentas() {
         </section>
       )}
 
+      <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <h2 className="text-lg font-semibold">Listado de ventas</h2>
+        <div className="grid grid-cols-2 gap-2 sm:flex">
+          <select className="input min-w-0 sm:w-auto!" value={filtros.id_vendedor} onChange={(e) => setFiltros({ ...filtros, id_vendedor: e.target.value })}>
+            <option value="">Todos los canales</option>
+            <option value="ninguno">Venta directa (sin vendedor)</option>
+            {vendedores.map((v) => <option key={v.id_vendedor} value={v.id_vendedor}>{v.apellido}, {v.nombre}</option>)}
+          </select>
+          <select className="input min-w-0 sm:w-auto!" value={filtros.estado} onChange={(e) => setFiltros({ ...filtros, estado: e.target.value })}>
+            <option value="">Todos los estados</option>
+            {['pendiente', 'pagado', 'cancelado', 'reembolsado'].map((e) => <option key={e}>{e}</option>)}
+          </select>
+        </div>
+      </div>
       <div className="card overflow-x-auto p-0!">
         <table className="tabla">
           <thead className="bg-zinc-50 dark:bg-white/5 text-left text-zinc-500 dark:text-zinc-400">

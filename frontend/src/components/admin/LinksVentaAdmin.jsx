@@ -29,6 +29,7 @@ export default function LinksVentaAdmin() {
   const [aviso, setAviso] = useState('');
   const [copiado, setCopiado] = useState(null);
   const [compras, setCompras] = useState(null);
+  const [todos, setTodos] = useState(false);
 
   const cargar = () => salesLinksApi.listar().then(setLinks).catch((e) => setError(mensajeError(e)));
   useEffect(() => {
@@ -108,8 +109,8 @@ export default function LinksVentaAdmin() {
         <p className="text-sm text-zinc-500 dark:text-zinc-400">Generá un link para compartir en redes. Cada pago se acredita en la cuenta de MercadoPago del complejo.</p>
       ) : (
         <ul className="divide-y divide-zinc-100 dark:divide-white/5">
-          {links.map((l) => (
-            <li key={l.id} className="flex flex-col gap-3 py-3 sm:flex-row sm:items-center sm:justify-between" data-testid={`sales-link-${l.id}`}>
+          {links.map((l, i) => (
+            <li key={l.id} className={`flex-col gap-3 py-3 sm:flex-row sm:items-center sm:justify-between ${!todos && i >= 3 ? 'hidden sm:flex' : 'flex'}`} data-testid={`sales-link-${l.id}`}>
               <div className="min-w-0 text-sm">
                 <p className="flex flex-wrap items-center gap-2 font-medium">{l.producto} <Badge {...estado(l)} /></p>
                 <p className="text-zinc-500 dark:text-zinc-400">
@@ -124,7 +125,7 @@ export default function LinksVentaAdmin() {
                   <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">Al evento le quedan {l.stock_evento} entradas de este tipo: el link no puede vender más que eso.</p>
                 )}
               </div>
-              <div className="flex shrink-0 gap-2">
+              <div className="grid shrink-0 grid-cols-4 gap-2 sm:flex">
                 <button className="btn-secondary py-1!" onClick={() => copiar(l)} aria-label={`Copiar link ${l.producto}`}>
                   {copiado === l.id ? <Check size={16} weight="bold" className="text-emerald-600" aria-hidden /> : <Copy size={16} weight="bold" aria-hidden />}
                 </button>
@@ -137,6 +138,12 @@ export default function LinksVentaAdmin() {
             </li>
           ))}
         </ul>
+      )}
+      {/* En celular la lista se corta en 3 para no tapar las ventas */}
+      {links.length > 3 && (
+        <button type="button" className="btn-secondary w-full sm:hidden" onClick={() => setTodos(!todos)} aria-expanded={todos}>
+          {todos ? 'Ver menos' : `Ver los ${links.length} links`}
+        </button>
       )}
 
       {abierto && (

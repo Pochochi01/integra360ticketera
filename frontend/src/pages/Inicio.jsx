@@ -64,7 +64,7 @@ function Hero({ destacado, cargando, tema }) {
 
       <div className="mx-auto grid min-h-[calc(100dvh-4rem)] max-w-6xl items-center gap-14 px-4 pb-20 pt-14 lg:grid-cols-12 lg:pt-20">
         <div className="lg:col-span-7">
-          <motion.h1 {...entrada(0)} className="max-w-[14ch] text-5xl font-semibold leading-[1.02] tracking-tighter text-zinc-900 dark:text-zinc-50 md:text-6xl lg:text-7xl">
+          <motion.h1 {...entrada(0)} className="max-w-[14ch] text-[2.5rem] font-semibold min-[400px]:text-5xl leading-[1.02] tracking-tighter text-zinc-900 dark:text-zinc-50 md:text-6xl lg:text-7xl">
             Tu noche empieza en un <span className="text-indigo-600 dark:text-indigo-400">QR</span>.
           </motion.h1>
           <motion.p {...entrada(1)} className="mt-6 max-w-[46ch] text-lg leading-relaxed text-zinc-600 dark:text-zinc-400">

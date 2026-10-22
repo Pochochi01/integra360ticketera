@@ -43,7 +43,7 @@ export default function SuperUsuarios() {
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-3xl font-semibold tracking-tight">Usuarios</h1>
         <div className="flex gap-2">
-          <select className="input w-auto!" value={filtroRol} onChange={(e) => setFiltroRol(e.target.value)}>
+          <select className="input sm:w-auto!" value={filtroRol} onChange={(e) => setFiltroRol(e.target.value)}>
             <option value="">Todos los roles</option>
             {['superadmin', 'admin', 'vendedor', 'comprador'].map((r) => <option key={r}>{r}</option>)}
           </select>

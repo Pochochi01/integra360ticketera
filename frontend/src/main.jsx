@@ -10,6 +10,9 @@ import { ConfirmarProvider } from './components/ui';
 import '@fontsource-variable/geist';
 import './index.css';
 import { registrarPWA } from './pwa';
+import { iniciarTablasResponsivas } from './utils/tablasResponsivas';
+
+iniciarTablasResponsivas();
 
 registrarPWA();
 

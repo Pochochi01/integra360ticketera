@@ -106,13 +106,15 @@ export const Modal = ({ titulo, children, onClose, ancho = 'max-w-md' }) => {
         initial={reducir ? { opacity: 0 } : { opacity: 0, transform: 'translateY(12px) scale(0.96)' }}
         animate={{ opacity: 1, transform: 'translateY(0px) scale(1)' }}
         transition={{ duration: 0.24, ease: EASE_OUT }}
-        className={`relative max-h-[92dvh] w-full ${ancho} overflow-y-auto rounded-t-3xl bg-white p-6 shadow-2xl ring-1 ring-zinc-900/10 sm:rounded-3xl dark:bg-zinc-900 dark:ring-white/10`}
+        className={`scroll-contenido relative max-h-[92dvh] w-full ${ancho} overflow-y-auto rounded-t-3xl bg-white p-5 pb-[calc(1.25rem+env(safe-area-inset-bottom))] shadow-2xl sm:p-6 ring-1 ring-zinc-900/10 sm:rounded-3xl dark:bg-zinc-900 dark:ring-white/10`}
       >
-        <div className="mb-5 flex items-center justify-between gap-4">
+        {/* Asa de la hoja en celulares: indica que es un panel por encima de la página */}
+        <div aria-hidden className="mx-auto -mt-2 mb-3 h-1 w-10 rounded-full bg-zinc-300 sm:hidden dark:bg-white/20" />
+        <div className="sticky -top-5 z-10 -mx-5 mb-5 flex items-center justify-between gap-4 bg-white/95 px-5 py-1 backdrop-blur sm:static sm:mx-0 sm:bg-transparent sm:px-0 sm:py-0 sm:backdrop-blur-none dark:bg-zinc-900/95 sm:dark:bg-transparent">
           <h3 id={idTitulo} className="text-lg font-semibold tracking-tight">{titulo}</h3>
           <button
             onClick={onClose}
-            className="grid h-8 w-8 place-items-center rounded-full text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:hover:bg-white/10 dark:hover:text-white"
+            className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-zinc-500 sm:h-8 sm:w-8 transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:hover:bg-white/10 dark:hover:text-white"
             aria-label="Cerrar"
           >
             <X size={16} weight="bold" aria-hidden />

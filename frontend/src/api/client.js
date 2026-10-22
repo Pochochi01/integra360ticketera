@@ -129,6 +129,11 @@ export const pagosApi = {
   crear: (d) => api.post('/pagos/crear', d, { headers: { 'X-Tenant': '' } }).then(datos),
 };
 
+// Panel del admin: estadísticas de un evento (el panel las vuelve a pedir cada 10 s)
+export const adminApi = {
+  estadisticasEvento: (id) => api.get(`/admin/event/${id}/stats`).then(datos),
+};
+
 // Links de venta del admin con stock propio (/venta/:linkId). El stock baja sólo con el pago aprobado.
 export const salesLinksApi = {
   crear: (d) => api.post('/ventas/link', d).then(datos),
