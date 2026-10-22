@@ -1,19 +1,38 @@
 /**
- * Link de WhatsApp al comprador con los links de descarga de sus entradas (uno por ticket), para enviarlos a
- * mano cuando el correo falló o como recordatorio. Abre el chat en el dispositivo del admin o del vendedor.
- * venta: { comprador, evento?, whatsapp, tickets_links: [{ numero, tipo, url }] }
+ * Mensajes de WhatsApp con los links de descarga de las entradas (uno por ticket, cada uno con su QR único).
+ * Los usan el admin (/admin/ventas, /admin/eventos) y el vendedor (Mis ventas): todos envían el mismo texto.
  */
-export const textoEntradas = (venta, evento) => {
-  const links = (venta.tickets_links || []).map((t) => `🎟️ Entrada ${t.numero}${t.tipo ? ` (${t.tipo})` : ''}: ${t.url}`);
-  return [`¡Hola ${venta.comprador?.split(' ')[0] || ''}! Estas son tus entradas${evento || venta.evento ? ` para ${evento || venta.evento}` : ''}:`, ...links, 'Cada una tiene su QR único: presentalo en la puerta.'].join('\n');
+export const TEXTO_ESTANDAR = 'Gracias por tu compra, aquí tienes tus entradas.';
+
+/**
+ * Texto del mensaje.
+ * nombre: del comprador (se usa el primer nombre) · evento: opcional · tickets: [{ numero, tipo?, link }]
+ */
+export const mensajeEntradas = ({ nombre, evento, tickets }) => {
+  const primerNombre = String(nombre || '').trim().split(/\s+/)[0];
+  return [
+    `¡Hola${primerNombre ? ` ${primerNombre}` : ''}! ${TEXTO_ESTANDAR}`,
+    ...(evento ? [`🎉 ${evento}`] : []),
+    '',
+    ...tickets.map((t) => `🎟️ Entrada ${t.numero}${t.tipo ? ` (${t.tipo})` : ''}: ${t.link}`),
+    '',
+    'Cada entrada tiene su QR único: presentalo en la puerta.',
+  ].join('\n');
 };
 
-/** https://wa.me/<teléfono sin + ni separadores>[?text=…] */
-export const urlWhatsappEntradas = (venta, evento) => {
-  const numero = String(venta.whatsapp || '').replace(/\D/g, '');
+/** https://wa.me/<teléfono sin + ni separadores>?text=<mensaje>; null si no hay teléfono. */
+export const urlWhatsapp = (telefono, texto) => {
+  const numero = String(telefono || '').replace(/\D/g, '');
   if (!numero) return null;
-  return venta.tickets_links?.length ? `https://wa.me/${numero}?text=${encodeURIComponent(textoEntradas(venta, evento))}` : `https://wa.me/${numero}`;
+  return texto ? `https://wa.me/${numero}?text=${encodeURIComponent(texto)}` : `https://wa.me/${numero}`;
 };
+
+/** Para filas que ya traen tickets_links ({ numero, tipo, url }) — paneles de correos y del vendedor. */
+export const textoEntradas = (venta, evento) =>
+  mensajeEntradas({ nombre: venta.comprador, evento: evento || venta.evento, tickets: (venta.tickets_links || []).map((t) => ({ ...t, link: t.url })) });
+
+export const urlWhatsappEntradas = (venta, evento) =>
+  urlWhatsapp(venta.whatsapp, venta.tickets_links?.length ? textoEntradas(venta, evento) : null);
 
 /** Estado del correo → texto y color del badge. */
 export const ESTADO_CORREO = {

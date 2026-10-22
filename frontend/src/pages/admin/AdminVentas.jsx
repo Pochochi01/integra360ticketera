@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
-import { eventosApi, mensajeError, urlUpload, vendedoresApi, ventasApi } from '../../api/client';
+import { adminApi, eventosApi, mensajeError, urlUpload, vendedoresApi, ventasApi } from '../../api/client';
 import { Alerta, Badge, Spinner, useConfirmar } from '../../components/ui';
 import { fecha, importe, moneda } from '../../utils/format';
 import LinksVentaAdmin from '../../components/admin/LinksVentaAdmin';
-import EnviarEntradasWhatsapp from '../../components/admin/EnviarEntradasWhatsapp';
+import { mensajeEntradas, urlWhatsapp } from '../../utils/entradasWhatsapp';
 import EventStatsModal, { Actualizado, REFRESCO_MS, useEstadisticasEvento } from '../../components/admin/EventStatsModal';
 import { CalendarBlank, ChartBar, Handshake, MapPin, Money, PaperPlaneTilt, WhatsappLogo } from '@phosphor-icons/react';
 
@@ -16,7 +16,11 @@ export default function AdminVentas() {
   const [eventos, setEventos] = useState([]);
   const [idEvento, setIdEvento] = useState('');
   const [statsAbierto, setStatsAbierto] = useState(false);
-  const [whatsappVenta, setWhatsappVenta] = useState(null); // id de la venta cuyas entradas se envían por WhatsApp
+  // Links de descarga por venta pagada (se piden al usarlos y quedan en caché): { [id_venta]: respuesta }
+  const [linksPorVenta, setLinksPorVenta] = useState({});
+  const [abiertos, setAbiertos] = useState({}); // ventas con la lista de links desplegada
+  const [enviandoWa, setEnviandoWa] = useState(null);
+  const [avisoWa, setAvisoWa] = useState({}); // { [id_venta]: mensaje } — se muestra junto al botón de esa venta
   const estadisticas = useEstadisticasEvento(idEvento);
   const [error, setError] = useState('');
   const [aviso, setAviso] = useState('');
@@ -46,6 +50,40 @@ export default function AdminVentas() {
     } catch (e) {
       setError(mensajeError(e));
     }
+  };
+
+  /** GET /api/admin/ventas/links/:id (una vez por venta). */
+  const obtenerLinks = async (idVenta) => {
+    if (linksPorVenta[idVenta]) return linksPorVenta[idVenta];
+    const datos = await adminApi.linksVenta(idVenta);
+    setLinksPorVenta((prev) => ({ ...prev, [idVenta]: datos }));
+    return datos;
+  };
+
+  /** «Enviar por WhatsApp»: trae los links, arma el mensaje y abre wa.me en el dispositivo del admin. */
+  const enviarPorWhatsapp = async (v) => {
+    setAvisoWa((prev) => ({ ...prev, [v.id_venta]: null }));
+    setEnviandoWa(v.id_venta);
+    try {
+      const d = await obtenerLinks(v.id_venta);
+      const url = urlWhatsapp(d.buyer_phone, mensajeEntradas({ nombre: d.buyer_name, evento: d.evento, tickets: d.tickets }));
+      if (!url) {
+        // Junto al botón (el admin está mirando esa fila, no el principio de la página)
+        setAvisoWa((prev) => ({ ...prev, [v.id_venta]: 'No se puede enviar por WhatsApp, falta número de teléfono.' }));
+        return;
+      }
+      window.location.href = url; // abre WhatsApp (app en el celular, WhatsApp Web en la computadora)
+    } catch (e) {
+      setAvisoWa((prev) => ({ ...prev, [v.id_venta]: mensajeError(e) }));
+    } finally {
+      setEnviandoWa(null);
+    }
+  };
+
+  const alternarLinks = async (v) => {
+    const abrir = !abiertos[v.id_venta];
+    setAbiertos((prev) => ({ ...prev, [v.id_venta]: abrir }));
+    if (abrir) await obtenerLinks(v.id_venta).catch((e) => setError(mensajeError(e)));
   };
 
   if (!ventas) return <Spinner />;
@@ -113,7 +151,6 @@ export default function AdminVentas() {
       )}
 
       <LinksVentaAdmin />
-      {whatsappVenta && <EnviarEntradasWhatsapp idVenta={whatsappVenta} onClose={() => setWhatsappVenta(null)} />}
 
       {/* Reservas en efectivo: sus tickets no sirven para ingresar hasta que el admin valida el cobro */}
       {efectivo.length > 0 && (
@@ -174,7 +211,24 @@ export default function AdminVentas() {
                 <td className="p-3">{v.id_venta}<div className="text-xs text-zinc-400 dark:text-zinc-500">{fecha(v.fecha_venta)}</div></td>
                 <td className="p-3">
                   {v.comprador}
-                  <div className="text-xs text-zinc-400 dark:text-zinc-500">{v.whatsapp_contacto || v.email_comprador}{v.whatsapp_enviado_en && <span className="ml-1 inline-flex items-center gap-0.5 text-emerald-600 dark:text-emerald-400"><WhatsappLogo size={12} weight="fill" aria-hidden />enviado</span>}</div>
+                  <div className="text-xs text-zinc-400 dark:text-zinc-500">{v.email_comprador || 'sin email'}</div>
+                  <div className="text-xs text-zinc-400 dark:text-zinc-500">{v.whatsapp_contacto || 'sin teléfono'}{v.whatsapp_enviado_en && <span className="ml-1 inline-flex items-center gap-0.5 text-emerald-600 dark:text-emerald-400"><WhatsappLogo size={12} weight="fill" aria-hidden />enviado</span>}</div>
+                  {v.estado === 'pagado' && (
+                    <div className="mt-1">
+                      <button type="button" className="text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400" onClick={() => alternarLinks(v)} aria-expanded={!!abiertos[v.id_venta]} data-testid={`ver-links-${v.id_venta}`}>
+                        {abiertos[v.id_venta] ? 'Ocultar links' : `Ver links de descarga (${v.cantidad_tickets})`}
+                      </button>
+                      {abiertos[v.id_venta] && (
+                        <ul className="mt-1 space-y-0.5" data-testid={`links-${v.id_venta}`}>
+                          {!linksPorVenta[v.id_venta] ? <li className="text-xs text-zinc-400">Cargando…</li> : linksPorVenta[v.id_venta].tickets.map((t) => (
+                            <li key={t.ticketId} className="text-xs">
+                              <a className="break-all text-indigo-600 hover:underline dark:text-indigo-400" href={`${t.link}?ver=1`} target="_blank" rel="noreferrer">Entrada {t.numero}{t.tipo ? ` · ${t.tipo}` : ''}</a>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  )}
                 </td>
                 <td className="p-3">{v.evento}</td>
                 <td className="p-3">
@@ -185,14 +239,16 @@ export default function AdminVentas() {
                 <td className="p-3">{moneda(v.monto_total)}</td>
                 <td className="p-3">{{ mercadopago: 'MercadoPago', efectivo: 'Efectivo', transferencia: 'Transferencia', cortesia: 'Cortesía' }[v.metodo_pago] || v.metodo_pago}<div className="text-xs text-zinc-400 dark:text-zinc-500">{v.referencia_pago}</div></td>
                 <td className="p-3"><Badge estado={v.estado} /></td>
-                <td className="space-x-2 whitespace-nowrap p-3 text-right">
+                <td className="p-3 text-right">
+                  {/* Las acciones pasan a otra línea si no entran (el botón de WhatsApp es ancho) */}
+                  <div className="flex flex-wrap items-center justify-end gap-2 *:whitespace-nowrap">
                   {v.estado === 'pendiente' && v.metodo_pago !== 'mercadopago' && (
                     <button className="btn-primary py-1!" onClick={() => accion(() => ventasApi.confirmarPago(v.id_venta), 'Pago confirmado y entradas enviadas')}>{v.metodo_pago === 'efectivo' ? 'Validar cobro' : 'Confirmar pago'}</button>
                   )}
                   {v.estado === 'pagado' && (
-                    <button className="btn-secondary py-1! text-emerald-700 dark:text-emerald-400" onClick={() => setWhatsappVenta(v.id_venta)}
-                      aria-label={`Enviar las entradas por WhatsApp a ${v.comprador}`} title="Enviar las entradas desde tu WhatsApp" data-testid={`whatsapp-venta-${v.id_venta}`}>
-                      <WhatsappLogo size={16} weight="fill" aria-hidden /> WhatsApp
+                    <button className="btn-secondary py-1! text-emerald-700 dark:text-emerald-400" onClick={() => enviarPorWhatsapp(v)} disabled={enviandoWa === v.id_venta}
+                      aria-label={`Enviar las entradas por WhatsApp a ${v.comprador}`} title="Abre WhatsApp con el mensaje y los links de las entradas" data-testid={`whatsapp-venta-${v.id_venta}`}>
+                      <WhatsappLogo size={16} weight="fill" aria-hidden /> {enviandoWa === v.id_venta ? 'Abriendo…' : 'Enviar por WhatsApp'}
                     </button>
                   )}
                   {v.estado === 'pagado' && v.whatsapp_contacto && (
@@ -202,6 +258,10 @@ export default function AdminVentas() {
                     <button className="btn-secondary py-1!" onClick={async () => (await confirmar(v.estado === 'pagado' ? `Se devuelve el dinero al comprador y se liberan sus entradas.` : `Se liberan las entradas reservadas.`, { titulo: `${v.estado === 'pagado' ? 'Reembolsar' : 'Cancelar'} venta #${v.id_venta}`, aceptar: v.estado === 'pagado' ? 'Reembolsar' : 'Cancelar venta', peligro: true })) && accion(() => ventasApi.cancelar(v.id_venta))}>
                       {v.estado === 'pagado' ? 'Reembolsar' : 'Cancelar'}
                     </button>
+                  )}
+                  </div>
+                  {avisoWa[v.id_venta] && (
+                    <p role="alert" className="mt-2 text-left text-xs font-medium text-rose-700 sm:text-right dark:text-rose-300" data-testid={`aviso-wa-${v.id_venta}`}>{avisoWa[v.id_venta]}</p>
                   )}
                 </td>
               </tr>

@@ -49,20 +49,30 @@ r.get('/event/:id/correos', admin, asyncHandler(async (req, res) => {
 }));
 
 /**
- * GET /ventas/:id/entradas — links de descarga de cada ticket de una venta pagada, con el teléfono y el estado
- * del correo: lo usa el botón de WhatsApp del admin (/admin/ventas) para enviarle las entradas al comprador.
+ * GET /ventas/links/:ventaId — links de descarga de una venta PAGADA del complejo, uno por ticket (cada uno con
+ * su QR único). Lo usa el botón «Enviar por WhatsApp» de /admin/ventas para armar el mensaje al comprador.
+ *   → { ventaId, buyer_name, buyer_email, buyer_phone, evento, estado_correo, tickets: [{ ticketId, numero, tipo, link }] }
+ * buyer_phone viene en E.164 (o null si no hay teléfono). 409 si la venta no está pagada; 404 si es de otro complejo.
  */
-r.get('/ventas/:id/entradas', admin, asyncHandler(async (req, res) => {
+r.get('/ventas/links/:ventaId', admin, asyncHandler(async (req, res) => {
   const [[venta]] = await pool.query(
-    `SELECT v.id_venta, v.estado, v.monto_total, v.whatsapp_contacto AS whatsapp, e.id_tenant, e.nombre AS evento,
-            CONCAT_WS(' ', u.nombre, u.apellido) AS comprador, u.email
+    `SELECT v.id_venta, v.estado, v.whatsapp_contacto AS whatsapp, e.id_tenant, e.nombre AS evento,
+            CONCAT_WS(' ', u.nombre, u.apellido) AS comprador, u.email, u.whatsapp AS whatsapp_cuenta
        FROM ventas v JOIN eventos e ON e.id_evento = v.id_evento JOIN usuarios u ON u.id_usuario = v.id_usuario
-      WHERE v.id_venta = ?`, [Number(req.params.id)]);
+      WHERE v.id_venta = ?`, [Number(req.params.ventaId)]);
   if (!venta || venta.id_tenant !== req.tenant.id_tenant) throw new AppError(404, 'Venta no encontrada');
-  if (venta.estado !== 'pagado') throw new AppError(409, 'Las entradas se envían cuando la venta está pagada');
+  if (venta.estado !== 'pagado') throw new AppError(409, 'Sólo se envían las entradas de ventas pagadas');
   const [conLinks] = await correosDeVentas([venta]);
-  delete conLinks.id_tenant;
-  res.json(conLinks);
+  res.json({
+    ventaId: venta.id_venta,
+    buyer_name: venta.comprador,
+    buyer_email: venta.email,
+    // El de la compra; si no se cargó, el de la cuenta del comprador
+    buyer_phone: venta.whatsapp || venta.whatsapp_cuenta || null,
+    evento: venta.evento,
+    estado_correo: conLinks.estado_correo,
+    tickets: conLinks.tickets_links.map((t) => ({ ticketId: t.id_ticket, numero: t.numero, tipo: t.tipo, link: t.url })),
+  });
 }));
 
 r.post('/ventas/:id/reenviar-correo', admin, asyncHandler(async (req, res) => {

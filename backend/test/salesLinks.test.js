@@ -732,23 +732,36 @@ test('correo: el vendedor ve el estado y los links sólo de sus compradores y pu
   assert.ok(!ventas.some((x) => x.id_venta === ajena.id_venta));
 });
 
-test('admin: botón de WhatsApp en Ventas — links de cada entrada de una venta pagada del complejo', async () => {
-  const venta = await compraAprobada(2);
-  const r = await api('GET', `/admin/ventas/${venta.id_venta}/entradas`, { token: datos[1].token });
-  assert.equal(r.status, 200, JSON.stringify(r.body));
-  assert.equal(r.body.tickets_links.length, 2);
-  assert.equal(new Set(r.body.tickets_links.map((t) => t.url)).size, 2, 'un link distinto por entrada');
-  assert.match(r.body.whatsapp, /^\+\d{8,15}$/);
-  assert.equal(r.body.email, venta.email);
-  assert.equal(r.body.estado_correo, 'sent');
-  assert.equal(r.body.id_tenant, undefined);
-  for (const t of r.body.tickets_links) assert.equal((await descargar(t.url)).status, 200);
-  // Coinciden con los del correo
-  assert.deepEqual(linksDelCorreo(correos.at(-1)), r.body.tickets_links.map((t) => t.url));
+test('admin: GET /api/admin/ventas/links/:ventaId — un link válido por ticket para el botón «Enviar por WhatsApp»', async () => {
+  const url = (id) => `/admin/ventas/links/${id}`;
+  for (const cantidad of [1, 3]) {
+    const venta = await compraAprobada(cantidad);
+    const r = await api('GET', url(venta.id_venta), { token: datos[1].token });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.ventaId, venta.id_venta);
+    assert.match(r.body.buyer_name, /^Canal \d+/);
+    assert.match(r.body.buyer_phone, /^\+\d{8,15}$/);
+    assert.equal(r.body.buyer_email, venta.email);
+    assert.equal(r.body.tickets.length, cantidad, `${cantidad} ticket(s) → ${cantidad} link(s)`);
+    assert.equal(new Set(r.body.tickets.map((t) => t.link)).size, cantidad, 'links únicos');
+    for (const t of r.body.tickets) {
+      assert.ok(Number.isInteger(t.ticketId));
+      const d = await descargar(t.link);
+      assert.equal(d.status, 200, 'link accesible');
+      assert.equal(d.headers.get('content-type'), 'image/png');
+    }
+    assert.deepEqual(linksDelCorreo(correos.at(-1)), r.body.tickets.map((t) => t.link), 'los mismos links que el correo');
+  }
 
-  assert.equal((await api('GET', `/admin/ventas/${venta.id_venta}/entradas`, { token: datos[2].token })).status, 404, 'otro complejo no');
-  assert.equal((await api('GET', `/admin/ventas/${venta.id_venta}/entradas`, { token: (await vendedor()).token })).status, 403, 'un vendedor no');
+  // Sin teléfono: buyer_phone null (el panel muestra «falta número de teléfono»)
+  const sinTel = await compraAprobada(1);
+  await pool.query('UPDATE ventas v JOIN usuarios u ON u.id_usuario = v.id_usuario SET v.whatsapp_contacto = NULL, u.whatsapp = NULL WHERE v.id_venta = ?', [sinTel.id_venta]);
+  assert.equal((await api('GET', url(sinTel.id_venta), { token: datos[1].token })).body.buyer_phone, null);
+
+  const venta = await compraAprobada(1);
+  assert.equal((await api('GET', url(venta.id_venta), { token: datos[2].token })).status, 404, 'otro complejo no');
+  assert.equal((await api('GET', url(venta.id_venta), { token: (await vendedor()).token })).status, 403, 'un vendedor no');
   const pendiente = await comprar({ event_id: datos[1].id_evento, items: items(1) });
-  assert.equal((await api('GET', `/admin/ventas/${pendiente.body.id_venta}/entradas`, { token: datos[1].token })).status, 409, 'sin pago no hay entradas que enviar');
+  assert.equal((await api('GET', url(pendiente.body.id_venta), { token: datos[1].token })).status, 409, 'venta no pagada');
 });
 

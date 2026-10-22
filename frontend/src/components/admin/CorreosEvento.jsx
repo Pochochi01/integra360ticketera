@@ -89,7 +89,7 @@ export default function CorreosEvento({ evento }) {
                   {v.estado_correo === 'failed' && v.correo_error && <p className="text-xs text-rose-700 dark:text-rose-300">{v.correo_error}</p>}
                   {v.correo_enviado_en && <p className="text-xs text-zinc-400 dark:text-zinc-500">Último intento {fecha(v.correo_enviado_en)}</p>}
                 </div>
-                <div className="grid min-w-0 shrink-0 grid-cols-3 gap-2 sm:flex [&>*]:min-w-0 [&>*]:px-2 sm:[&>*]:px-4">
+                <div className="grid min-w-0 shrink-0 grid-cols-3 gap-2 sm:flex *:min-w-0 *:px-2 sm:*:px-4">
                   <button className="btn-secondary py-1!" onClick={() => reenviar(v)} disabled={enviando === v.id_venta || !v.email}>
                     <ArrowClockwise size={14} weight="bold" className={enviando === v.id_venta ? 'animate-spin motion-reduce:animate-none' : ''} aria-hidden /> Reenviar
                   </button>
