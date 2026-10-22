@@ -6,6 +6,10 @@ const { enviarLinkDeVenta } = require('../services/notificaciones');
 const chatbot = require('../services/chatbot');
 const { crearLinkCheckout, urlCheckout } = require('../services/linksCheckout');
 const { metodosVendedor } = require('../services/pagosService');
+const SalesLink = require('../models/SalesLink');
+const { correosDeVentas, enviarEntradasPorCorreo } = require('../services/correo');
+const { MercadoPagoToken } = require('../models/MercadoPagoToken');
+const { crearSalesLink, conUrl: salesLinkConUrl } = require('../services/salesLinks');
 
 const LIMITE_POR_MINUTO = 20;
 const envios = new Map(); // id_vendedor → timestamps de envíos recientes
@@ -77,23 +81,73 @@ exports.enviarLink = asyncHandler(async (req, res) => {
   res.json({ mensaje: `Link enviado a ${destino}`, provider: r.provider });
 });
 
-/** Ventas atribuidas al vendedor. Los datos del comprador se muestran parcialmente. */
+/** Estado del pago como lo informa MercadoPago (mismo criterio que las vistas reservations / sales_link_tickets). */
+const estadoPago = (v) => {
+  if (v.estado === 'pagado') return 'approved';
+  if (v.estado === 'reembolsado') return 'refunded';
+  if (v.estado === 'cancelado') return 'cancelled';
+  return v.estado_ultimo_pago === 'rechazado' ? 'rejected' : 'pending';
+};
+const ESTADOS_PAGO = ['approved', 'pending', 'rejected', 'cancelled', 'refunded'];
+
+/**
+ * Ventas atribuidas al vendedor (links de venta, links de pago y links reutilizables).
+ * ?estado_pago=approved|pending|rejected filtra por el estado del pago. El teléfono del comprador va completo
+ * (whatsapp) para que el vendedor pueda contactarlo: son sus propios clientes; la versión enmascarada queda
+ * en whatsapp_oculto para mostrar en pantalla.
+ */
 exports.ventas = asyncHandler(async (req, res) => {
+  const filtro = req.query.estado_pago;
+  if (filtro && !ESTADOS_PAGO.includes(filtro)) throw new AppError(400, `estado_pago inválido (${ESTADOS_PAGO.join(' | ')})`);
   const ventas = await Venta.findAll({ id_tenant: req.tenant.id_tenant, id_vendedor: req.vendedor.id_vendedor, estado: req.query.estado });
-  res.json(
-    ventas.map((v) => ({
+  res.json(await correosDeVentas(
+    ventas.filter((v) => !filtro || estadoPago(v) === filtro).map((v) => ({
       id_venta: v.id_venta,
       fecha_venta: v.fecha_venta,
       evento: v.evento,
       comprador: v.comprador,
-      whatsapp: enmascarar(v.whatsapp_contacto),
+      whatsapp: v.whatsapp_contacto,
+      whatsapp_oculto: enmascarar(v.whatsapp_contacto),
+      estado_pago: estadoPago(v),
       cantidad_tickets: v.cantidad_tickets,
       monto_total: v.monto_total,
       estado: v.estado,
       metodo_pago: v.metodo_pago,
       codigo_link: v.codigo_link,
     }))
-  );
+  ));
+});
+
+// ---------- Links reutilizables (/venta/:linkId) — misma lógica que los del admin, con el vendedor como dueño ----------
+
+/** POST /api/vendedor/sales-links { id_tipo, stock_total, reutilizable?, producto? } (precio = el del tipo). */
+exports.crearSalesLink = asyncHandler(async (req, res) => {
+  if (req.body.tenant_id !== undefined && Number(req.body.tenant_id) !== req.tenant.id_tenant) throw new AppError(403, 'El complejo no corresponde a tu sesión');
+  if (req.body.seller_id !== undefined && Number(req.body.seller_id) !== req.vendedor.id_vendedor) throw new AppError(403, 'El vendedor no corresponde a tu sesión');
+  const { id_tipo, stock_total, reutilizable, producto } = req.body;
+  const link = await crearSalesLink({ tenant: req.tenant, usuario: req.usuario, vendedor: req.vendedor, id_tipo, stock_total, reutilizable, producto });
+  const cuenta = await MercadoPagoToken.publica(req.tenant.id_tenant);
+  res.status(201).json({
+    ...link, mensaje: 'Link reutilizable generado',
+    aviso: cuenta?.conectado && cuenta.activo ? link.aviso : 'El complejo no tiene MercadoPago conectado: el link no va a poder cobrar hasta que el administrador lo conecte',
+  });
+});
+
+exports.salesLinks = asyncHandler(async (req, res) => res.json((await SalesLink.findByVendedor(req.vendedor.id_vendedor)).map(salesLinkConUrl)));
+
+exports.actualizarSalesLink = asyncHandler(async (req, res) => {
+  const [r] = await SalesLink.setActivo(req.params.id, req.tenant.id_tenant, Boolean(req.body.activo), req.vendedor.id_vendedor);
+  if (!r.affectedRows) throw new AppError(404, 'Link no encontrado');
+  res.json(salesLinkConUrl(await SalesLink.findById(req.params.id)));
+});
+
+exports.ticketsSalesLink = asyncHandler(async (req, res) => res.json(await SalesLink.tickets(req.params.id, req.tenant.id_tenant, req.vendedor.id_vendedor)));
+
+/** POST /api/vendedor/ventas/:id/reenviar-correo — sólo ventas propias del vendedor. */
+exports.reenviarCorreo = asyncHandler(async (req, res) => {
+  const venta = await Venta.findById(Number(req.params.id));
+  if (!venta || venta.id_tenant !== req.tenant.id_tenant || venta.id_vendedor !== req.vendedor.id_vendedor) throw new AppError(404, 'Venta no encontrada');
+  res.json(await enviarEntradasPorCorreo(venta.id_venta));
 });
 
 exports.eventos = asyncHandler(async (req, res) => res.json(await Evento.findAll({ id_tenant: req.tenant.id_tenant })));

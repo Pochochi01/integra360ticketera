@@ -39,6 +39,9 @@ const Ticket = {
   findByVenta: async (idVenta, db = pool) =>
     (await db.query(`${SELECT_TICKET} WHERE t.id_venta = ? ORDER BY t.id_ticket`, [idVenta]))[0],
 
+  /** Ticket por su link de descarga propio (tickets.token_descarga). */
+  findByTokenDescarga: async (token) => (await pool.query(`${SELECT_TICKET} WHERE t.token_descarga = ?`, [token]))[0][0],
+
   findById: async (id, db = pool) => (await db.query(`${SELECT_TICKET} WHERE t.id_ticket = ?`, [id]))[0][0],
 
   lockById: async (id, db) => (await db.query(`${SELECT_TICKET} WHERE t.id_ticket = ? FOR UPDATE`, [id]))[0][0],

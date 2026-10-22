@@ -44,6 +44,8 @@ const cargarEvento = asyncHandler(async (req, _res, next) => {
 /** Reserva sin descontar stock + preferencia en la cuenta del complejo → { init_point }. */
 const crear = asyncHandler(async (req, res) => {
   const link = req.salesLink || null;
+  // Link reutilizable de un vendedor: la venta (y sus tickets) quedan atribuidas a él → «Mis ventas» y estadísticas
+  if (link?.seller_id) req.compra.vendedor = { id_vendedor: link.seller_id, id_link: null };
   // Un link del complejo fija su precio (puede diferir del precio de lista del tipo de entrada)
   if (link) req.compra.total = Math.round(Number(link.precio) * req.compra.cantidadTotal * 100) / 100;
 

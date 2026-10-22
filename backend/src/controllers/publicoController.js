@@ -9,16 +9,33 @@ const { AppError, asyncHandler } = require('../utils/errors');
 const fechaLarga = (f) => new Date(String(f).replace(' ', 'T')).toLocaleString('es-AR', { dateStyle: 'medium', timeStyle: 'short' });
 
 /** PNG de la entrada (imagen del evento + QR). Compartido con /tickets/:id/imagen. */
-const enviarImagenTicket = async (res, ticket, { tenant, color, indice, total }) => {
+const enviarImagenTicket = async (res, ticket, { tenant, color, indice, total, descargar = false }) => {
   const png = await generarImagenTicket({
     codigo: ticket.codigo_qr, evento: ticket.evento, fecha: fechaLarga(ticket.fecha_evento), lugar: ticket.lugar,
     tipo: ticket.nombre_tipo, asiento: ticket.asiento, titular: ticket.titular, tenant, imagen: ticket.imagen_evento,
     color: color || undefined, indice, total,
   });
-  res.set({ 'Content-Type': 'image/png', 'Cache-Control': 'private, no-store', 'Content-Disposition': `inline; filename="entrada-${ticket.id_ticket}.png"` });
+  res.set({ 'Content-Type': 'image/png', 'Cache-Control': 'private, no-store', 'Content-Disposition': `${descargar ? 'attachment' : 'inline'}; filename="entrada-${ticket.id_ticket}.png"` });
   res.send(png);
 };
 exports.enviarImagenTicket = enviarImagenTicket;
+
+/**
+ * GET /publico/tickets/:token/descargar — link ÚNICO de un ticket (el del correo). Descarga sólo esa entrada,
+ * con su QR. 404 si el ticket fue cancelado / reembolsado o el token no existe.
+ */
+exports.descargarTicket = asyncHandler(async (req, res) => {
+  if (!/^[a-f0-9]{40}$/.test(req.params.token)) throw new AppError(404, 'Entrada no encontrada');
+  const ticket = await Ticket.findByTokenDescarga(req.params.token);
+  if (!ticket || !['valido', 'usado'].includes(ticket.estado)) throw new AppError(404, 'Entrada no disponible');
+  const hermanos = (await Ticket.findByVenta(ticket.id_venta)).filter((t) => t.id_usuario === ticket.id_usuario);
+  const tenant = await Tenant.findById(ticket.id_tenant);
+  await enviarImagenTicket(res, ticket, {
+    tenant: tenant.nombre, color: tenant.config?.color_primario,
+    indice: hermanos.findIndex((t) => t.id_ticket === ticket.id_ticket) + 1, total: hermanos.length,
+    descargar: !req.query.ver, // descarga directa; ?ver=1 la muestra en pantalla
+  });
+});
 
 /**
  * GET /publico/links/:codigo — resuelve un link de vendedor (sin login).

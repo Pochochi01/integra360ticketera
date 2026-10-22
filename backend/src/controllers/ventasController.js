@@ -9,6 +9,7 @@ const Pago = require('../models/Pago');
 const ListaEspera = require('../models/ListaEspera');
 const { generarCodigo, generarTokenAcceso } = require('../utils/qr');
 const { enviarEntradasPorWhatsapp } = require('../services/notificaciones');
+const { enviarEntradasPorCorreo } = require('../services/correo');
 const pagos = require('../services/pagosService');
 const { procesarPago } = require('../utils/pagos');
 const { AppError, asyncHandler } = require('../utils/errors');
@@ -97,7 +98,10 @@ const ejecutarVenta = async (compra, { empresa = null, marcarPagado = false, exp
     return { venta: await Venta.findById(idVenta, conn), tickets: await Ticket.findByVenta(idVenta, conn) };
   });
   // Ventas gratuitas o ya pagadas: se envía el link de las entradas por WhatsApp (fuera de la transacción)
-  if (resultado.venta.estado === 'pagado') resultado.whatsapp = await enviarEntradasPorWhatsapp(resultado.venta.id_venta);
+  if (resultado.venta.estado === 'pagado') {
+    resultado.whatsapp = await enviarEntradasPorWhatsapp(resultado.venta.id_venta);
+    resultado.correo = await enviarEntradasPorCorreo(resultado.venta.id_venta);
+  }
   return resultado;
 };
 
@@ -228,6 +232,7 @@ exports.pagar = asyncHandler(async (req, res) => {
   });
   if (r.estado === 'rechazado') throw new AppError(402, r.mensaje);
   resultado.whatsapp = await enviarEntradasPorWhatsapp(venta.id_venta);
+  if (r.estado === 'aprobado') resultado.correo = await enviarEntradasPorCorreo(venta.id_venta);
   res.json(resultado);
 });
 
@@ -267,7 +272,8 @@ const confirmarCobroManual = ({ soloEfectivo = false } = {}) => asyncHandler(asy
     return Venta.findById(v.id_venta, conn);
   });
   const whatsapp = await enviarEntradasPorWhatsapp(venta.id_venta);
-  res.json({ ...venta, tickets: (await Ticket.findByVenta(venta.id_venta)).map((t) => ({ id_ticket: t.id_ticket, estado: t.estado, validado: t.estado === 'valido' })), whatsapp });
+  const correo = await enviarEntradasPorCorreo(venta.id_venta);
+  res.json({ ...venta, correo, tickets: (await Ticket.findByVenta(venta.id_venta)).map((t) => ({ id_ticket: t.id_ticket, estado: t.estado, validado: t.estado === 'valido' })), whatsapp });
 });
 exports.confirmarPago = confirmarCobroManual();
 exports.validarEfectivo = confirmarCobroManual({ soloEfectivo: true });

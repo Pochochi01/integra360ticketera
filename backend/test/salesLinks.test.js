@@ -51,6 +51,16 @@ mp.oauthToken = async (cuerpo) => {
 };
 // Sin WhatsApp en las pruebas
 require('../src/services/notificaciones').enviarEntradasPorWhatsapp = async () => ({ simulado: true });
+// SMTP simulado: guarda cada correo; fallarCorreo = true hace que el próximo envío falle
+const correos = [];
+let fallarCorreo = false;
+require('../src/services/correo').setTransporte({
+  sendMail: async (m) => {
+    if (fallarCorreo) { fallarCorreo = false; throw new Error('SMTP caído (simulado)'); }
+    correos.push(m);
+    return { messageId: `m${correos.length}` };
+  },
+});
 
 /** El comprador paga la preferencia en MercadoPago: el pago queda en la cuenta del token que la creó. */
 const pagar = (pref, status = 'approved') => {
@@ -509,3 +519,216 @@ test('admin: edita el evento y agrega entradas (sin poder descontar), con audito
   const bajar = await api('PUT', `/eventos/tipos/${datos[1].id_tipo}`, { token: datos[1].token, body: { stock_total: vendidos - 1 } });
   assert.equal(bajar.status, 409);
 });
+
+// ── Links reutilizables de VENDEDORES (sales_links.seller_id) ───────────────────────────────────────
+
+/** JWT de un vendedor activo del complejo 1 (del seed). */
+const vendedor = async () => {
+  const [[v]] = await pool.query(
+    "SELECT vd.id_vendedor, u.id_usuario, u.email FROM vendedores vd JOIN usuarios u USING (id_usuario) WHERE vd.id_tenant = 1 AND vd.estado = 'activo' ORDER BY vd.id_vendedor LIMIT 1");
+  assert.ok(v, 'el seed debe tener un vendedor activo en el complejo 1');
+  return { ...v, token: jwt.sign({ id_usuario: v.id_usuario, email: v.email, nombre: 'Vendedor', rol: 'vendedor', id_tenant: 1 }, process.env.JWT_SECRET, { expiresIn: '1h' }) };
+};
+
+test('vendedor: genera un link reutilizable que usan varios compradores; stock al aprobar y vendedor en cada ticket', async () => {
+  const v = await vendedor();
+  assert.equal((await api('POST', '/vendedor/sales-links', { token: v.token, body: { id_tipo: datos[1].id_tipo, stock_total: 10, tenant_id: 2 } })).status, 403);
+  assert.equal((await api('POST', '/vendedor/sales-links', { token: v.token, body: { id_tipo: datos[2].id_tipo, stock_total: 10 } })).status, 404, 'no vende eventos de otro complejo');
+
+  const r = await api('POST', '/vendedor/sales-links', { token: v.token, body: { id_tipo: datos[1].id_tipo, stock_total: 10, precio: 1 } });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  const link = r.body;
+  const [[tipo]] = await pool.query('SELECT precio FROM tipos_ticket WHERE id_tipo = ?', [datos[1].id_tipo]);
+  assert.equal(link.precio, Number(tipo.precio), 'el vendedor vende al precio de lista (no puede fijar uno propio)');
+  assert.equal(link.seller_id, v.id_vendedor);
+  assert.match(link.url, /\/venta\/[A-Za-z0-9]+$/);
+  assert.ok((await api('GET', `/publico/venta/${link.id}`)).body.vendedor, 'la página muestra quién atiende');
+
+  // Varios compradores con el mismo link
+  const stockEvento = await stockTipo(datos[1].id_tipo);
+  const compras = [];
+  for (const cantidad of [2, 1, 3]) {
+    const c = await comprar({ linkId: link.id, cantidad });
+    assert.equal(c.status, 201, JSON.stringify(c.body));
+    assert.equal(cuentaDeToken.get(ultimaPreferencia().access_token), datos[1].mpUser, 'cobra la cuenta del complejo');
+    compras.push({ ...c.body, pref: ultimaPreferencia(), cantidad });
+  }
+  assert.equal(await stock(link.id), 10, 'crear preferencias no descuenta el stock del link');
+  assert.equal(await stockTipo(datos[1].id_tipo), stockEvento, 'ni el del evento');
+
+  await webhook(pagar(compras[0].pref), datos[1].mpUser);
+  await webhook(pagar(compras[1].pref, 'rejected'), datos[1].mpUser);
+  await webhook(pagar(compras[2].pref), datos[1].mpUser);
+  assert.equal(await stock(link.id), 10 - 2 - 3);
+  assert.equal(await stockTipo(datos[1].id_tipo), stockEvento - 5);
+
+  // El vendedor queda identificado en cada venta y en cada ticket
+  for (const c of compras) {
+    const [[venta]] = await pool.query('SELECT id_vendedor FROM ventas WHERE id_venta = ?', [c.id_venta]);
+    assert.equal(venta.id_vendedor, v.id_vendedor);
+    const [tickets] = await pool.query('SELECT seller_id, event_id, buyer_email, buyer_phone, monto FROM tickets_detalle WHERE venta_id = ?', [c.id_venta]);
+    assert.equal(tickets.length, c.cantidad);
+    for (const t of tickets) {
+      assert.equal(t.seller_id, v.id_vendedor);
+      assert.equal(t.event_id, datos[1].id_evento);
+      assert.ok(t.buyer_email && t.buyer_phone);
+      assert.equal(Number(t.monto), Number(tipo.precio));
+    }
+  }
+  // Cuenta en las estadísticas del evento como venta del vendedor
+  const st = (await stats(1)).body;
+  assert.ok(st.por_vendedor.find((c) => c.clave === `vendedor:${v.id_vendedor}`)?.unidades >= 5);
+});
+
+test('vendedor: «Mis ventas» filtra por estado del pago y trae el teléfono para WhatsApp', async () => {
+  const v = await vendedor();
+  const todas = (await api('GET', '/vendedor/ventas', { token: v.token })).body;
+  assert.ok(todas.length >= 3);
+  for (const estado of ['approved', 'pending', 'rejected']) {
+    const r = await api('GET', `/vendedor/ventas?estado_pago=${estado}`, { token: v.token });
+    assert.equal(r.status, 200);
+    assert.ok(r.body.every((x) => x.estado_pago === estado), estado);
+    assert.equal(r.body.length, todas.filter((x) => x.estado_pago === estado).length);
+  }
+  assert.ok(todas.some((x) => x.estado_pago === 'rejected'), 'el pago rechazado de la prueba anterior figura como rejected');
+  assert.ok(todas.every((x) => !x.whatsapp || /^\+\d{8,15}$/.test(x.whatsapp)), 'teléfono completo en E.164 para wa.me');
+  assert.equal((await api('GET', '/vendedor/ventas?estado_pago=otro', { token: v.token })).status, 400);
+});
+
+test('vendedor: sólo administra sus links; el admin los ve; vendedor inactivo → el link deja de vender', async () => {
+  const v = await vendedor();
+  const { body: deAdmin } = await crearLink(1, { stock_total: 5 });
+  assert.equal((await api('PATCH', `/vendedor/sales-links/${deAdmin.id}`, { token: v.token, body: { activo: false } })).status, 404, 'no pausa links del admin');
+  const { body: propio } = await api('POST', '/vendedor/sales-links', { token: v.token, body: { id_tipo: datos[1].id_tipo, stock_total: 5 } });
+  const mios = (await api('GET', '/vendedor/sales-links', { token: v.token })).body;
+  assert.ok(mios.every((l) => l.seller_id === v.id_vendedor) && mios.some((l) => l.id === propio.id));
+  const delAdmin = (await api('GET', '/ventas/link', { token: datos[1].token })).body.find((l) => l.id === propio.id);
+  assert.ok(delAdmin?.vendedor, 'el admin ve el link con el nombre del vendedor');
+
+  await pool.query("UPDATE vendedores SET estado = 'inactivo' WHERE id_vendedor = ?", [v.id_vendedor]);
+  try {
+    assert.equal((await comprar({ linkId: propio.id })).status, 409);
+    assert.equal((await api('GET', `/publico/venta/${propio.id}`)).body.motivo, 'pausado');
+  } finally {
+    await pool.query("UPDATE vendedores SET estado = 'activo' WHERE id_vendedor = ?", [v.id_vendedor]);
+  }
+  assert.equal((await comprar({ linkId: propio.id })).status, 201);
+});
+
+// ── Entradas por correo: un link de descarga único por ticket ───────────────────────────────────────
+
+const linksDelCorreo = (m) => [...new Set(m.text.match(/https?:\/\/\S+\/api\/publico\/tickets\/[a-f0-9]{40}\/descargar/g) || [])];
+const descargar = async (url) => fetch(`${base}${new URL(url).pathname}`);
+const estadoCorreoTickets = async (idVenta) =>
+  (await pool.query('SELECT email_status, email_sent_at, email_error, token_descarga FROM tickets WHERE id_venta = ? ORDER BY id_ticket', [idVenta]))[0];
+/** Las pruebas anteriores pueden haber agotado el evento: el admin agrega entradas (POST /admin/event/:id/update). */
+const asegurarStock = async (minimo) => {
+  const disponible = await stockTipo(datos[1].id_tipo);
+  if (disponible >= minimo) return;
+  const r = await api('POST', `/admin/event/${datos[1].id_evento}/update`, { token: datos[1].token, body: { agregar_stock: [{ id_tipo: datos[1].id_tipo, cantidad: 100 }] } });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+};
+/** Compra directa de n entradas, aprobada por webhook. Devuelve la venta y el email del comprador. */
+const compraAprobada = async (n) => {
+  await asegurarStock(n + 10);
+  const r = await comprar({ event_id: datos[1].id_evento, items: items(n) });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  const email = `canal${comprador}@test.com`;
+  await webhook(pagar(ultimaPreferencia()), datos[1].mpUser);
+  return { ...r.body, email };
+};
+
+test('correo: una entrada → un link; varias → un link único por ticket; sólo con el pago aprobado', async () => {
+  await asegurarStock(20);
+  // Sin pago aprobado no sale ningún correo
+  const antesDeCrear = correos.length;
+  const pendiente = await comprar({ event_id: datos[1].id_evento, items: items(1) });
+  assert.equal(correos.length, antesDeCrear, 'crear la preferencia no envía correo');
+  assert.equal((await estadoCorreoTickets(pendiente.body.id_venta))[0].email_status, null);
+
+  const stockAntes = await stockTipo(datos[1].id_tipo);
+  const una = await compraAprobada(1);
+  assert.equal(await stockTipo(datos[1].id_tipo), stockAntes - 1, 'el stock baja al aprobarse');
+  const m1 = correos.at(-1);
+  assert.equal(m1.to, una.email);
+  assert.match(m1.subject, /Tus entradas/);
+  assert.equal(linksDelCorreo(m1).length, 1);
+  const [t1] = await estadoCorreoTickets(una.id_venta);
+  assert.equal(t1.email_status, 'sent');
+  assert.ok(t1.email_sent_at);
+
+  const tres = await compraAprobada(3);
+  const m3 = correos.at(-1);
+  const links = linksDelCorreo(m3);
+  assert.equal(links.length, 3, '3 entradas → 3 links distintos');
+  assert.ok((await estadoCorreoTickets(tres.id_venta)).every((t) => t.email_status === 'sent'));
+  for (const url of links) assert.ok(m3.html.includes(url), 'los mismos links van en la versión HTML');
+
+  // Cada link descarga su propia entrada (PNG con su QR), como archivo
+  for (const url of links) {
+    const r = await descargar(url);
+    assert.equal(r.status, 200);
+    assert.equal(r.headers.get('content-type'), 'image/png');
+    assert.match(r.headers.get('content-disposition'), /^attachment; filename="entrada-\d+\.png"/);
+  }
+  const archivos = await Promise.all(links.map(async (u) => (await descargar(u)).headers.get('content-disposition')));
+  assert.equal(new Set(archivos).size, 3, 'cada link corresponde a un ticket distinto');
+
+  // Una notificación repetida de MercadoPago no reenvía el correo
+  const total = correos.length;
+  const [[{ referencia_externa: idPagoMp }]] = await pool.query("SELECT referencia_externa FROM pagos WHERE id_venta = ? AND estado = 'aprobado'", [tres.id_venta]);
+  await webhook(idPagoMp, datos[1].mpUser);
+  assert.equal(correos.length, total);
+
+  // Un ticket reembolsado deja de descargarse
+  await pool.query("UPDATE tickets SET estado = 'reembolsado' WHERE token_descarga = ?", [new URL(links[0]).pathname.split('/')[4]]);
+  assert.equal((await descargar(links[0])).status, 404);
+  assert.equal((await fetch(`${base}/api/publico/tickets/${'0'.repeat(40)}/descargar`)).status, 404);
+});
+
+test('correo: si falla queda «failed»; el admin lo ve en el evento y lo reenvía', async () => {
+  fallarCorreo = true;
+  const venta = await compraAprobada(2);
+  const estados = await estadoCorreoTickets(venta.id_venta);
+  assert.ok(estados.every((t) => t.email_status === 'failed'));
+  assert.match(estados[0].email_error, /SMTP caído/);
+  assert.equal(await estadoVenta(venta.id_venta), 'pagado', 'un correo fallido no afecta la venta');
+
+  const lista = await api('GET', `/admin/event/${datos[1].id_evento}/correos`, { token: datos[1].token });
+  assert.equal(lista.status, 200);
+  const fila = lista.body.find((v) => v.id_venta === venta.id_venta);
+  assert.equal(fila.estado_correo, 'failed');
+  assert.match(fila.correo_error, /SMTP caído/);
+  assert.equal(fila.tickets_links.length, 2, 'el admin tiene los links para mandarlos por WhatsApp');
+  assert.ok(fila.whatsapp && fila.email);
+  assert.equal((await api('GET', `/admin/event/${datos[1].id_evento}/correos`, { token: datos[2].token })).body.length, 0, 'otro complejo no ve nada');
+
+  assert.equal((await api('POST', `/admin/ventas/${venta.id_venta}/reenviar-correo`, { token: datos[2].token })).status, 404);
+  const reenvio = await api('POST', `/admin/ventas/${venta.id_venta}/reenviar-correo`, { token: datos[1].token });
+  assert.equal(reenvio.status, 200);
+  assert.equal(reenvio.body.estado, 'sent');
+  assert.deepEqual(linksDelCorreo(correos.at(-1)), fila.tickets_links.map((t) => t.url), 'reenvía los mismos links');
+  assert.ok((await estadoCorreoTickets(venta.id_venta)).every((t) => t.email_status === 'sent'));
+});
+
+test('correo: el vendedor ve el estado y los links sólo de sus compradores y puede reenviar los suyos', async () => {
+  const v = await vendedor();
+  await asegurarStock(20);
+  const { body: link } = await api('POST', '/vendedor/sales-links', { token: v.token, body: { id_tipo: datos[1].id_tipo, stock_total: 5 } });
+  const c = await comprar({ linkId: link.id, cantidad: 2 });
+  assert.equal(c.status, 201, JSON.stringify(c.body));
+  await webhook(pagar(ultimaPreferencia()), datos[1].mpUser);
+
+  const ventas = (await api('GET', '/vendedor/ventas?estado_pago=approved', { token: v.token })).body;
+  const propia = ventas.find((x) => x.id_venta === c.body.id_venta);
+  assert.equal(propia.estado_correo, 'sent');
+  assert.equal(propia.tickets_links.length, 2);
+  const [[{ id_vendedor: dueno }]] = await pool.query('SELECT id_vendedor FROM ventas WHERE id_venta = ?', [c.body.id_venta]);
+  assert.equal(dueno, v.id_vendedor);
+
+  assert.equal((await api('POST', `/vendedor/ventas/${c.body.id_venta}/reenviar-correo`, { token: v.token })).body.estado, 'sent');
+  const ajena = await compraAprobada(1); // venta directa, sin vendedor
+  assert.equal((await api('POST', `/vendedor/ventas/${ajena.id_venta}/reenviar-correo`, { token: v.token })).status, 404);
+  assert.ok(!ventas.some((x) => x.id_venta === ajena.id_venta));
+});
+

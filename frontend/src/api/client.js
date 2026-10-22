@@ -120,7 +120,14 @@ export const vendedorApi = {
   crearLink: (d) => api.post('/vendedor/links', d).then(datos),
   actualizarLink: (id, d) => api.patch(`/vendedor/links/${id}`, d).then(datos),
   enviarLink: (id, d) => api.post(`/vendedor/links/${id}/enviar`, d).then(datos),
-  ventas: () => api.get('/vendedor/ventas').then(datos),
+  // estado_pago: approved | pending | rejected (opcional)
+  ventas: (params) => api.get('/vendedor/ventas', { params }).then(datos),
+  // Links reutilizables del vendedor (/venta/:linkId): misma interfaz que salesLinksApi del admin
+  salesLinks: () => api.get('/vendedor/sales-links').then(datos),
+  crearSalesLink: (d) => api.post('/vendedor/sales-links', d).then(datos),
+  actualizarSalesLink: (id, d) => api.patch(`/vendedor/sales-links/${id}`, d).then(datos),
+  ticketsSalesLink: (id) => api.get(`/vendedor/sales-links/${id}/tickets`).then(datos),
+  reenviarCorreo: (idVenta) => api.post(`/vendedor/ventas/${idVenta}/reenviar-correo`).then(datos),
 };
 
 // Página /checkout/:linkId (pública): datos del complejo y creación del pago en MercadoPago
@@ -138,6 +145,9 @@ export const adminApi = {
   actualizarEvento: (id, d) => api.post(`/admin/event/${id}/update`, d).then(datos),
   // Venta directa con MercadoPago desde el panel: mismo checkout único que el resto de los canales
   cobrarMercadoPago: (d) => api.post('/ventas/checkout', d).then(datos),
+  // Correos con las entradas: estado por venta + links por ticket; reenviar
+  correosEvento: (id) => api.get(`/admin/event/${id}/correos`).then(datos),
+  reenviarCorreo: (idVenta) => api.post(`/admin/ventas/${idVenta}/reenviar-correo`).then(datos),
 };
 
 // Links de venta del admin con stock propio (/venta/:linkId). El stock baja sólo con el pago aprobado.

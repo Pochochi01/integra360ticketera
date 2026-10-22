@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Check, Copy, LinkSimple, ShareNetwork } from '@phosphor-icons/react';
-import { eventosApi, mensajeError, salesLinksApi } from '../../api/client';
+import { eventosApi, mensajeError, salesLinksApi, vendedorApi } from '../../api/client';
 import { Alerta, Badge, Modal } from '../ui';
 import { fecha, moneda } from '../../utils/format';
 
@@ -18,7 +18,22 @@ const PROBLEMAS = {
   tipo_inactivo: () => 'No se vende: el tipo de entrada está desactivado en Eventos.',
 };
 
-export default function LinksVentaAdmin() {
+// Misma pantalla para el admin y el vendedor; cambia de dónde salen los datos y qué se puede configurar
+const FUENTES = {
+  admin: {
+    listar: salesLinksApi.listar, crear: salesLinksApi.crear, actualizar: salesLinksApi.actualizar, tickets: salesLinksApi.tickets,
+    eventos: () => eventosApi.listarTodos(), titulo: 'Links de venta',
+  },
+  vendedor: {
+    listar: vendedorApi.salesLinks, crear: vendedorApi.crearSalesLink, actualizar: vendedorApi.actualizarSalesLink, tickets: vendedorApi.ticketsSalesLink,
+    eventos: () => vendedorApi.eventos(), titulo: 'Mis links reutilizables',
+  },
+};
+
+/** modo 'vendedor': links propios del vendedor (vende al precio de lista; cada venta queda a su nombre). */
+export default function LinksVentaAdmin({ modo = 'admin' }) {
+  const fuente = FUENTES[modo];
+  const esVendedor = modo === 'vendedor';
   const [links, setLinks] = useState([]);
   const [eventos, setEventos] = useState([]);
   const [tipos, setTipos] = useState([]);
@@ -31,10 +46,10 @@ export default function LinksVentaAdmin() {
   const [compras, setCompras] = useState(null);
   const [todos, setTodos] = useState(false);
 
-  const cargar = () => salesLinksApi.listar().then(setLinks).catch((e) => setError(mensajeError(e)));
+  const cargar = () => fuente.listar().then(setLinks).catch((e) => setError(mensajeError(e)));
   useEffect(() => {
     cargar();
-    eventosApi.listarTodos().then((evs) => setEventos(evs.filter((e) => e.estado === 'publicado'))).catch(() => {});
+    fuente.eventos().then((evs) => setEventos(evs.filter((e) => e.estado === 'publicado'))).catch(() => {});
   }, []);
   useEffect(() => {
     setTipos([]);
@@ -48,9 +63,9 @@ export default function LinksVentaAdmin() {
     setEnviando(true);
     setError('');
     try {
-      const r = await salesLinksApi.crear({
+      const r = await fuente.crear({
         id_tipo: Number(form.id_tipo), stock_total: Number(form.stock_total), reutilizable: form.reutilizable,
-        precio: form.precio ? Number(form.precio) : undefined, producto: form.producto || undefined,
+        precio: !esVendedor && form.precio ? Number(form.precio) : undefined, producto: form.producto || undefined,
       });
       setAviso(r.aviso || 'Link de venta generado: ya lo podés compartir');
       setAbierto(false);
@@ -71,9 +86,18 @@ export default function LinksVentaAdmin() {
     } catch { /* la URL queda visible */ }
   };
 
+  // En celulares abre el menú nativo para compartir (Instagram, Facebook, WhatsApp…); si no existe, sigue el link a WhatsApp
+  const compartir = async (e, l) => {
+    if (!navigator.share) return;
+    e.preventDefault();
+    try {
+      await navigator.share({ title: l.producto, text: `Comprá tus entradas: ${l.producto}`, url: l.url });
+    } catch { /* el usuario cerró el menú */ }
+  };
+
   const pausar = async (l) => {
     try {
-      await salesLinksApi.actualizar(l.id, { activo: !l.activo });
+      await fuente.actualizar(l.id, { activo: !l.activo });
       await cargar();
     } catch (e) {
       setError(mensajeError(e));
@@ -82,7 +106,7 @@ export default function LinksVentaAdmin() {
 
   const verCompras = async (l) => {
     try {
-      setCompras({ link: l, filas: await salesLinksApi.tickets(l.id) });
+      setCompras({ link: l, filas: await fuente.tickets(l.id) });
     } catch (e) {
       setError(mensajeError(e));
     }
@@ -98,7 +122,7 @@ export default function LinksVentaAdmin() {
     <section className="card mb-6 space-y-3" aria-labelledby="titulo-links-venta">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 id="titulo-links-venta" className="flex items-center gap-2 text-lg font-semibold">
-          <LinkSimple size={22} weight="duotone" className="text-indigo-600 dark:text-indigo-400" aria-hidden /> Links de venta
+          <LinkSimple size={22} weight="duotone" className="text-indigo-600 dark:text-indigo-400" aria-hidden /> {fuente.titulo}
         </h2>
         <button className="btn-primary py-1!" onClick={() => setAbierto(true)}>Generar link</button>
       </div>
@@ -114,6 +138,7 @@ export default function LinksVentaAdmin() {
               <div className="min-w-0 text-sm">
                 <p className="flex flex-wrap items-center gap-2 font-medium">{l.producto} <Badge {...estado(l)} /></p>
                 <p className="text-zinc-500 dark:text-zinc-400">
+                  {!esVendedor && l.vendedor && <span className="text-indigo-700 dark:text-indigo-300">de {l.vendedor} · </span>}
                   {moneda(l.precio)} · {l.reutilizable ? 'reutilizable' : 'único'} · stock <b className="tabular-nums text-zinc-900 dark:text-white">{l.stock_disponible}/{l.stock_total}</b>
                   {' '}· {l.ventas_aprobadas} aprobada{l.ventas_aprobadas === 1 ? '' : 's'}{l.ventas_pendientes > 0 && ` · ${l.ventas_pendientes} pendiente${l.ventas_pendientes === 1 ? '' : 's'}`}
                 </p>
@@ -129,7 +154,8 @@ export default function LinksVentaAdmin() {
                 <button className="btn-secondary py-1!" onClick={() => copiar(l)} aria-label={`Copiar link ${l.producto}`}>
                   {copiado === l.id ? <Check size={16} weight="bold" className="text-emerald-600" aria-hidden /> : <Copy size={16} weight="bold" aria-hidden />}
                 </button>
-                <a className="btn-secondary py-1!" href={`https://wa.me/?text=${encodeURIComponent(`${l.producto}: ${l.url}`)}`} target="_blank" rel="noreferrer" aria-label="Compartir por WhatsApp">
+                <a className="btn-secondary py-1!" href={`https://wa.me/?text=${encodeURIComponent(`${l.producto}: ${l.url}`)}`} target="_blank" rel="noreferrer"
+                  aria-label="Compartir (Instagram, Facebook, WhatsApp…)" onClick={(e) => compartir(e, l)}>
                   <ShareNetwork size={16} weight="bold" aria-hidden />
                 </a>
                 <button className="btn-secondary py-1!" onClick={() => verCompras(l)}>Compras</button>
@@ -168,10 +194,12 @@ export default function LinksVentaAdmin() {
               <input id="sl-producto" className="input" maxLength={120} placeholder="Ej. Preventa Instagram" value={form.producto} onChange={set('producto')} />
             </div>
             <div className="grid gap-3 sm:grid-cols-2">
+              {!esVendedor && (
               <div>
                 <label className="label" htmlFor="sl-precio">Precio por entrada</label>
                 <input id="sl-precio" className="input" type="number" min="1" step="0.01" inputMode="decimal" placeholder="El del tipo" value={form.precio} onChange={set('precio')} />
               </div>
+              )}
               <div>
                 <label className="label" htmlFor="sl-stock">{form.reutilizable ? 'Stock del link' : 'Entradas de la compra'}</label>
                 <input id="sl-stock" className="input" type="number" min="1" max={form.reutilizable ? 100000 : 50} inputMode="numeric" value={form.stock_total} onChange={set('stock_total')} required />

@@ -79,6 +79,7 @@ export default function VentaLink() {
         <div className="min-w-0">
           <h1 className="text-2xl font-semibold tracking-tight">{complejo.nombre}</h1>
           {complejo.direccion && <p className="mt-1 flex items-center gap-1.5 text-sm text-zinc-500 dark:text-zinc-400"><MapPin size={16} weight="duotone" aria-hidden /> {complejo.direccion}</p>}
+          {datos.vendedor && <p className="mt-1 text-sm text-indigo-700 dark:text-indigo-300">Te atiende <b>{datos.vendedor}</b></p>}
         </div>
       </header>
 

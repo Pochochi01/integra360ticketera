@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { adminApi, eventosApi, mensajeError, urlUpload } from '../../api/client';
 import { AgregarEntradasModal, CobroDirectoModal, HistorialEvento } from '../../components/admin/EventoAdminExtras';
+import CorreosEvento from '../../components/admin/CorreosEvento';
 import { Plus, Wallet } from '@phosphor-icons/react';
 import { Alerta, Badge, Modal, Spinner, useConfirmar } from '../../components/ui';
 import { fecha, moneda } from '../../utils/format';
@@ -103,7 +104,7 @@ export default function AdminEventos() {
       <Alerta tipo="exito" onClose={() => setAviso('')}>{aviso}</Alerta>
 
       <div className="grid gap-6 lg:grid-cols-5">
-        <div className="card divide-y divide-zinc-100 dark:divide-white/5 p-0! lg:col-span-2">
+        <div className="card min-w-0 divide-y divide-zinc-100 dark:divide-white/5 p-0! lg:col-span-2">
           {eventos.map((e) => (
             <button
               key={e.id_evento}
@@ -119,7 +120,7 @@ export default function AdminEventos() {
           ))}
         </div>
 
-        <div className="lg:col-span-3">
+        <div className="min-w-0 lg:col-span-3">
           {!seleccionado ? (
             <p className="text-zinc-400 dark:text-zinc-500">Seleccioná un evento para gestionarlo.</p>
           ) : (
@@ -217,6 +218,8 @@ export default function AdminEventos() {
                   </table>
                 </div>
               </div>
+
+              <CorreosEvento evento={seleccionado} />
 
               <HistorialEvento auditoria={seleccionado.auditoria} />
 

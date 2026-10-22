@@ -296,3 +296,132 @@ POST /api/admin/event/:id/update   { nombre?, fecha?, lugar?, descripcion?, limi
   - edita nombre y lugar, agrega 10 entradas, el evento vuelve a `publicado` y quedan las dos entradas de auditoría;
   - las entradas nuevas se venden;
   - no se puede bajar el cupo por debajo de lo vendido.
+
+## Links reutilizables de vendedores (migración 015)
+
+El vendedor genera links reutilizables (`/venta/:linkId`) con la **misma tabla y la misma lógica** que el admin: `sales_links`, ahora con `seller_id`.
+
+- `seller_id NULL` → link del complejo: todo sigue igual que antes.
+- `seller_id = N` → link del vendedor N.
+
+Para el link del vendedor:
+
+- **Atribución:** cada compra guarda `ventas.id_vendedor = N`, que heredan sus tickets. Por eso aparece en «Mis ventas», en las estadísticas por vendedor y en los reportes.
+- **Precio:** el de lista del tipo de entrada. Fijar un precio propio queda reservado al admin.
+- **Vendedor desactivado:** el link deja de vender (409) y la página lo muestra como pausado.
+- **Igual que el link del admin:**
+  - mismo checkout único (`POST /api/ventas/checkout` con `linkId`);
+  - preferencia con el token del complejo;
+  - mismo webhook;
+  - el stock del link y el del evento se descuentan **sólo al aprobarse el pago**;
+  - con stock 0, ningún canal vende.
+
+### API del vendedor (JWT de vendedor)
+
+```http
+GET   /api/vendedor/sales-links              sus links, con stock y ventas
+POST  /api/vendedor/sales-links              { id_tipo, stock_total, reutilizable?, producto? }
+PATCH /api/vendedor/sales-links/:id          { activo }   sólo sus propios links (otro → 404)
+GET   /api/vendedor/sales-links/:id/tickets  compras del link
+GET   /api/vendedor/ventas?estado_pago=approved|pending|rejected
+```
+
+`/api/vendedor/ventas` ahora devuelve también:
+
+- `estado_pago`;
+- `whatsapp` completo (E.164), para el botón de WhatsApp;
+- `whatsapp_oculto`, la versión enmascarada que se muestra en pantalla.
+
+### Vistas
+
+- `sales_link_tickets`: suma `seller_id`, `event_id` y `buyer_phone`.
+- `tickets_detalle`: una fila por ticket con `seller_id`, `event_id`, `buyer_name`, `buyer_email`, `buyer_phone`, `estado` (approved / pending / rejected…) y `monto` (prorrateado por ticket).
+
+Los datos siguen guardados una sola vez, en la venta.
+
+### Panel `/vendedor`
+
+- **Pestañas:** se quitaron «Links de pago» y «Links de venta». Quedan:
+  - **Link de pago**, con tres modos: **Link reutilizable** (por defecto), Link para el cliente y Cargar la compra;
+  - **Mis ventas**.
+- **Compartir:** en el celular abre el menú nativo (Instagram, Facebook, WhatsApp…). En escritorio abre WhatsApp.
+- **Mis ventas:**
+  - filtro Todas / Aprobadas / Pendientes / Rechazadas, resuelto por el backend;
+  - botón **WhatsApp** en cada venta, que abre `https://wa.me/<teléfono del comprador>`.
+- El admin ve los links de los vendedores en su lista, con el nombre del vendedor.
+
+### Pruebas (3 nuevas, 18 en total)
+
+- **Link reutilizable del vendedor:**
+  - otro complejo → 403/404;
+  - se ignora el precio que envíe el vendedor;
+  - tres compradores usan el mismo link: el stock del link y del evento no cambia al crear las preferencias, y sólo los pagos aprobados descuentan (un rechazado no);
+  - cada venta y cada ticket (`tickets_detalle`) llevan el `seller_id`, y la venta suma en las estadísticas del vendedor;
+  - todas cobran en la cuenta del complejo.
+- **«Mis ventas»:** cada filtro devuelve sólo su estado; el teléfono viene completo en E.164; un filtro inválido → 400.
+- **Aislamiento:**
+  - el vendedor no puede pausar links del admin;
+  - lista sólo los suyos;
+  - el admin los ve con el nombre del vendedor;
+  - con el vendedor inactivo el link no vende, y al reactivarlo vuelve a vender.
+- **Navegador** (Edge, celular y escritorio): pestañas, creación del link desde la UI, página pública con «Te atiende», filtros y enlace `wa.me`. Sin scroll horizontal.
+
+## Entradas por correo (Nodemailer, migración 016)
+
+Cuando un pago **se confirma**, se envía al comprador un correo con **un link de descarga por cada ticket** (2 entradas → 2 links). Cada link baja sólo esa entrada, como PNG con su QR único:
+
+```
+https://<dominio>/api/publico/tickets/<token del ticket>/descargar      (?ver=1 la muestra en vez de descargarla)
+```
+
+- **Cuándo se envía:** al confirmarse el pago, en el mismo lugar donde ya se avisaba por WhatsApp:
+  - webhook de MercadoPago (sólo en la primera aprobación: una notificación repetida no reenvía);
+  - cobro manual validado por el admin;
+  - emisiones sin cargo.
+
+  Nunca antes del pago. El stock sigue descontándose sólo al aprobarse (sin cambios).
+- **Un token por ticket** (`tickets.token_descarga`): el link de un ticket no da acceso a las demás entradas de la compra, así el comprador puede reenviar una sola. Para tickets anteriores se genera cuando hace falta. Un ticket cancelado o reembolsado deja de descargarse (404).
+- **Estado por ticket:**
+  - `tickets.email_status`: `pending` mientras se envía, `sent` si salió, `failed` si falló;
+  - `email_sent_at` y `email_error` guardan cuándo y por qué;
+  - `NULL` = venta todavía no confirmada o anterior a esta función.
+- **Fallos:** un correo que falla nunca afecta la venta ni el webhook. Se registra `failed` con el motivo: SMTP caído, comprador sin email o SMTP sin configurar.
+- **Configuración** en `.env`: `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS`, `MAIL_FROM`. Sin `SMTP_HOST`, los correos quedan `failed` («SMTP no configurado») hasta configurarlo, y se pueden reenviar.
+
+### Gestión
+
+```http
+GET  /api/admin/event/:id/correos                 (admin)    ventas pagadas del evento: estado del correo, motivo, links por ticket
+POST /api/admin/ventas/:id/reenviar-correo        (admin)    cualquier venta pagada del complejo
+POST /api/vendedor/ventas/:id/reenviar-correo     (vendedor) sólo sus propias ventas (otra → 404)
+GET  /api/vendedor/ventas                         ahora incluye estado_correo y tickets_links
+```
+
+- **`/admin/eventos`**, sección **Correos de entradas** del evento:
+  - badge de estado por venta y contador de fallidos;
+  - filtro: fallidos, enviados o sin enviar;
+  - **Reenviar**;
+  - **WhatsApp**: abre `wa.me/<teléfono del comprador>` con un mensaje que ya trae el link de cada entrada;
+  - **Links**: copia ese mensaje.
+- **`/vendedor` → Mis ventas:** columna **Correo**, botón para reenviarlo (ventas aprobadas propias) y **WhatsApp** con los links de las entradas de ese comprador.
+
+### Pruebas (3 nuevas, 21 en total, con SMTP simulado)
+
+- **Una y varias entradas:**
+  - crear la preferencia no envía correo y el estado queda `NULL`;
+  - al aprobar, 1 entrada → 1 link y 3 entradas → 3 links distintos, en texto y en HTML;
+  - cada link descarga su propio PNG como archivo;
+  - el stock baja;
+  - el ticket queda `sent` con su fecha;
+  - una notificación repetida no reenvía;
+  - un ticket reembolsado o un token inexistente → 404.
+- **Fallo y reenvío:**
+  - el SMTP falla → tickets `failed` con el motivo, y la venta sigue pagada;
+  - el admin lo ve en el evento con los links y el teléfono; otro complejo no ve nada y su reenvío da 404;
+  - al reenviar llegan los mismos links y queda `sent`.
+- **Vendedor:** ve el estado y los links de sus ventas, reenvía las suyas y no puede reenviar ni ver una venta ajena (404).
+- **Navegador** (Edge, 360 / 820 / 1280 px):
+  - la sección del admin muestra los estados;
+  - el WhatsApp del admin y del vendedor abre el chat con los links de cada entrada;
+  - sin SMTP, «Reenviar» informa el motivo;
+  - sin desbordes.

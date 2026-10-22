@@ -6,7 +6,8 @@ const { MercadoPagoToken } = require('../models/MercadoPagoToken');
 const { AppError } = require('../utils/errors');
 
 /**
- * Links de venta del administrador del complejo: https://<frontend>/venta/:linkId (sales_links.id).
+ * Links de venta reutilizables: https://<frontend>/venta/:linkId (sales_links.id). Los genera el admin del
+ * complejo (seller_id NULL) o un vendedor (seller_id = su id_vendedor: cada venta queda atribuida a él).
  *
  * Se comparten en redes. Cada link vende un tipo de entrada a un precio propio y tiene stock propio:
  *  - reutilizable: muchas compras hasta agotar el stock
@@ -33,11 +34,15 @@ const problemaDelEvento = (l) => {
   return null;
 };
 
-/** Un link se puede comprar si está activo, tiene stock y el link único todavía no se vendió. */
-const disponible = (l) => Boolean(l.activo) && l.stock_disponible > 0;
+/** Un link se puede comprar si está activo, tiene stock, el link único no se vendió y su vendedor (si tiene) sigue activo. */
+const disponible = (l) => Boolean(l.activo) && l.stock_disponible > 0 && (!l.seller_id || l.estado_vendedor === 'activo');
 
-/** Valida y crea el link. El tipo de entrada debe ser de un evento del complejo y estar a la venta. */
-const crearSalesLink = async ({ tenant, usuario, id_tipo, producto, precio, stock_total, reutilizable }) => {
+/**
+ * Valida y crea el link. El tipo de entrada debe ser de un evento del complejo y estar a la venta.
+ * vendedor: si lo genera un vendedor, queda como dueño (seller_id) y vende al precio de lista del tipo (no puede
+ * fijar un precio propio: eso queda para el admin).
+ */
+const crearSalesLink = async ({ tenant, usuario, vendedor = null, id_tipo, producto, precio, stock_total, reutilizable }) => {
   const tipo = id_tipo ? await TipoTicket.findById(Number(id_tipo)) : null;
   if (!tipo) throw new AppError(400, 'Elegí el tipo de entrada que vende el link');
   const evento = await Evento.findById(tipo.id_evento);
@@ -50,7 +55,7 @@ const crearSalesLink = async ({ tenant, usuario, id_tipo, producto, precio, stoc
   const reutil = reutilizable === undefined ? true : reutilizable === true || reutilizable === 'true' || reutilizable === 1;
   // Link único: una compra de stock_total entradas (tope razonable para una sola persona)
   if (!reutil && stock > 50) throw new AppError(400, 'Un link único vende como máximo 50 entradas');
-  const monto = precio === undefined || precio === null || precio === '' ? Number(tipo.precio) : Number(precio);
+  const monto = vendedor || precio === undefined || precio === null || precio === '' ? Number(tipo.precio) : Number(precio);
   if (!(monto > 0) || monto > 10_000_000) throw new AppError(400, 'El precio debe ser mayor a 0');
   // Aviso (no bloquea): el link no puede vender más de lo que queda del tipo de entrada en el evento
   const aviso = stock > tipo.stock_disponible
@@ -59,7 +64,7 @@ const crearSalesLink = async ({ tenant, usuario, id_tipo, producto, precio, stoc
   const nombre = String(producto || `${evento.nombre} · ${tipo.nombre_tipo}`).trim().slice(0, 120);
 
   const id = await SalesLink.create({
-    tenant_id: tenant.id_tenant, id_tipo: tipo.id_tipo, producto: nombre, precio: Math.round(monto * 100) / 100,
+    tenant_id: tenant.id_tenant, seller_id: vendedor?.id_vendedor || null, id_tipo: tipo.id_tipo, producto: nombre, precio: Math.round(monto * 100) / 100,
     stock_total: stock, reutilizable: reutil, creado_por: usuario.id_usuario,
   });
   return { ...conUrl(await SalesLink.findById(id)), aviso };
@@ -87,7 +92,8 @@ const datosVenta = async (id) => {
     cantidad_fija: link.reutilizable ? null : link.stock_total,
     cantidad_maxima: link.reutilizable ? Math.max(1, Math.min(link.stock_disponible, link.stock_evento, evento.limite_por_persona || 50, 50)) : link.stock_total,
     disponible: vendible,
-    motivo: vendible ? null : !link.activo ? 'pausado' : link.stock_disponible <= 0 ? (link.reutilizable ? 'agotado' : 'usado') : problema,
+    vendedor: link.seller_id ? link.vendedor : null,
+    motivo: vendible ? null : !link.activo || (link.seller_id && link.estado_vendedor !== 'activo') ? 'pausado' : link.stock_disponible <= 0 ? (link.reutilizable ? 'agotado' : 'usado') : problema,
     evento: { id_evento: evento.id_evento, nombre: evento.nombre, fecha: evento.fecha, lugar: evento.lugar, imagen_evento: evento.imagen_evento, tipo: link.tipo },
     complejo: { nombre: t.nombre, slug: t.slug, direccion: t.direccion, telefono: t.telefono, email: t.email_contacto, logo_url: t.logo_url, color: t.color_primario },
     mercadopago_disponible: Boolean(cuenta?.conectado && cuenta.activo),

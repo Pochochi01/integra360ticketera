@@ -50,6 +50,7 @@ exports.cargarLink = asyncHandler(async (req, _res, next) => {
   const link = id && (await SalesLink.findById(id));
   if (!link) throw new AppError(404, 'Este link de venta no existe');
   if (!link.activo) throw new AppError(409, 'El link de venta está pausado');
+  if (link.seller_id && link.estado_vendedor !== 'activo') throw new AppError(409, 'El vendedor de este link no está activo');
   if (!disponible(link)) throw new AppError(409, link.reutilizable ? 'Se agotaron las entradas de este link' : 'Este link ya fue utilizado');
   if (req.body.tenant_id !== undefined && Number(req.body.tenant_id) !== link.tenant_id) throw new AppError(403, 'El complejo no corresponde al link');
 

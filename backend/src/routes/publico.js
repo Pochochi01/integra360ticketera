@@ -9,6 +9,8 @@ r.get('/links/:codigo', c.resolverLink);
 r.get('/checkout/:linkId', verCheckout);
 // Página del link de venta del admin
 r.get('/venta/:linkId', require('../controllers/salesLinksController').verPublico);
+// Link único de descarga de cada ticket (el que llega por correo)
+r.get('/tickets/:token/descargar', c.descargarTicket);
 r.get('/entradas/:token', c.entradas);
 r.get('/entradas/:token/verificar-pago', c.verificarPago);
 r.get('/entradas/:token/tickets/:idTicket.png', c.imagenEntrada);

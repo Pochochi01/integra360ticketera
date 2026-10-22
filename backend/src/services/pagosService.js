@@ -10,6 +10,7 @@ const { conCredenciales } = require('./mercadopagoTokens');
 const { Suscripcion } = require('../models/Suscripcion');
 const mp = require('./mercadopagoService');
 const { enviarEntradasPorWhatsapp } = require('./notificaciones');
+const { enviarEntradasPorCorreo } = require('./correo');
 const { telefonoMercadoPago } = require('../utils/whatsapp');
 
 const simulados = () => process.env.PAGOS_SIMULADOS === 'true';
@@ -206,7 +207,11 @@ const procesarPagoMercadoPago = async (ambito, paymentId) => {
     return { tipo, id: pago.id_suscripcion, estado };
   });
 
-  if (enviarWhatsapp) resultado.whatsapp = await enviarEntradasPorWhatsapp(enviarWhatsapp);
+  // Sólo en la PRIMERA aprobación (r.cambio): una notificación repetida de MercadoPago no reenvía nada
+  if (enviarWhatsapp) {
+    resultado.whatsapp = await enviarEntradasPorWhatsapp(enviarWhatsapp);
+    resultado.correo = await enviarEntradasPorCorreo(enviarWhatsapp);
+  }
   if (reembolsoTardio) {
     await conCredenciales(Number(ambito), (cred) => mp.reembolsar(cred, reembolsoTardio.paymentId));
     await Pago.actualizar(reembolsoTardio.idPago, { estado: 'reembolsado' });

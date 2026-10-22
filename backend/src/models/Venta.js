@@ -14,6 +14,7 @@ const SELECT_VENTA = `
          CONCAT_WS(' ', uv.nombre, uv.apellido) AS vendedor,
          vl.id_link, l.codigo AS codigo_link,
          (SELECT COALESCE(p.referencia_externa, p.preference_id) FROM pagos p WHERE p.id_venta = v.id_venta ORDER BY p.id_pago DESC LIMIT 1) AS referencia_pago,
+         (SELECT p.estado FROM pagos p WHERE p.id_venta = v.id_venta ORDER BY p.id_pago DESC LIMIT 1) AS estado_ultimo_pago,
          (SELECT MAX(m.creado_en) FROM mensajes_whatsapp m WHERE m.id_venta = v.id_venta AND m.tipo = 'entradas' AND m.estado = 'enviado') AS whatsapp_enviado_en,
          (SELECT COUNT(*) FROM tickets t WHERE t.id_venta = v.id_venta) AS cantidad_tickets
     FROM ventas v

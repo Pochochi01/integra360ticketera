@@ -13,5 +13,11 @@ r.post('/links', c.crearLink);
 r.patch('/links/:id', c.actualizarLink);
 r.post('/links/:id/enviar', requiereChatbot, c.enviarLink);
 r.get('/ventas', c.ventas);
+r.post('/ventas/:id/reenviar-correo', c.reenviarCorreo);
+// Links reutilizables del vendedor (sales_links con seller_id): se comparten en Instagram, Facebook o WhatsApp
+r.get('/sales-links', c.salesLinks);
+r.post('/sales-links', c.crearSalesLink);
+r.patch('/sales-links/:id', c.actualizarSalesLink);
+r.get('/sales-links/:id/tickets', c.ticketsSalesLink);
 
 module.exports = r;
