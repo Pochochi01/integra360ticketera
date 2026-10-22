@@ -148,6 +148,8 @@ export const adminApi = {
   // Correos con las entradas: estado por venta + links por ticket; reenviar
   correosEvento: (id) => api.get(`/admin/event/${id}/correos`).then(datos),
   reenviarCorreo: (idVenta) => api.post(`/admin/ventas/${idVenta}/reenviar-correo`).then(datos),
+  // Links de cada ticket de una venta pagada (botón de WhatsApp del admin)
+  entradasVenta: (idVenta) => api.get(`/admin/ventas/${idVenta}/entradas`).then(datos),
 };
 
 // Links de venta del admin con stock propio (/venta/:linkId). El stock baja sólo con el pago aprobado.

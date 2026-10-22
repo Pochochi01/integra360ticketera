@@ -43,7 +43,18 @@ export default function CorreosEvento({ evento }) {
     } catch { setError('No se pudo copiar: copiá los links desde el detalle'); }
   };
 
-  if (!ventas) return null;
+  // Si el endpoint falla (ej. migración 016 sin aplicar en el servidor) se muestra el error: no desaparece la sección
+  if (!ventas) {
+    return error ? (
+      <section aria-labelledby="titulo-correos" data-testid="correos-evento">
+        <h3 id="titulo-correos" className="mb-2 flex items-center gap-2 font-semibold">
+          <EnvelopeSimple size={18} weight="duotone" className="text-zinc-500" aria-hidden /> Correos de entradas
+        </h3>
+        <Alerta>{`No se pudo cargar el estado de los correos: ${error}`}</Alerta>
+        <button type="button" className="btn-secondary py-1!" onClick={() => { setError(''); cargar(); }}>Reintentar</button>
+      </section>
+    ) : null;
+  }
   const fallidos = ventas.filter((v) => v.estado_correo === 'failed').length;
   const visibles = filtro ? ventas.filter((v) => (filtro === 'sin' ? !v.estado_correo : v.estado_correo === filtro)) : ventas;
 

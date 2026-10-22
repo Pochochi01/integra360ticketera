@@ -3,6 +3,7 @@ import { eventosApi, mensajeError, urlUpload, vendedoresApi, ventasApi } from '.
 import { Alerta, Badge, Spinner, useConfirmar } from '../../components/ui';
 import { fecha, importe, moneda } from '../../utils/format';
 import LinksVentaAdmin from '../../components/admin/LinksVentaAdmin';
+import EnviarEntradasWhatsapp from '../../components/admin/EnviarEntradasWhatsapp';
 import EventStatsModal, { Actualizado, REFRESCO_MS, useEstadisticasEvento } from '../../components/admin/EventStatsModal';
 import { CalendarBlank, ChartBar, Handshake, MapPin, Money, PaperPlaneTilt, WhatsappLogo } from '@phosphor-icons/react';
 
@@ -15,6 +16,7 @@ export default function AdminVentas() {
   const [eventos, setEventos] = useState([]);
   const [idEvento, setIdEvento] = useState('');
   const [statsAbierto, setStatsAbierto] = useState(false);
+  const [whatsappVenta, setWhatsappVenta] = useState(null); // id de la venta cuyas entradas se envían por WhatsApp
   const estadisticas = useEstadisticasEvento(idEvento);
   const [error, setError] = useState('');
   const [aviso, setAviso] = useState('');
@@ -111,6 +113,7 @@ export default function AdminVentas() {
       )}
 
       <LinksVentaAdmin />
+      {whatsappVenta && <EnviarEntradasWhatsapp idVenta={whatsappVenta} onClose={() => setWhatsappVenta(null)} />}
 
       {/* Reservas en efectivo: sus tickets no sirven para ingresar hasta que el admin valida el cobro */}
       {efectivo.length > 0 && (
@@ -186,8 +189,14 @@ export default function AdminVentas() {
                   {v.estado === 'pendiente' && v.metodo_pago !== 'mercadopago' && (
                     <button className="btn-primary py-1!" onClick={() => accion(() => ventasApi.confirmarPago(v.id_venta), 'Pago confirmado y entradas enviadas')}>{v.metodo_pago === 'efectivo' ? 'Validar cobro' : 'Confirmar pago'}</button>
                   )}
+                  {v.estado === 'pagado' && (
+                    <button className="btn-secondary py-1! text-emerald-700 dark:text-emerald-400" onClick={() => setWhatsappVenta(v.id_venta)}
+                      aria-label={`Enviar las entradas por WhatsApp a ${v.comprador}`} title="Enviar las entradas desde tu WhatsApp" data-testid={`whatsapp-venta-${v.id_venta}`}>
+                      <WhatsappLogo size={16} weight="fill" aria-hidden /> WhatsApp
+                    </button>
+                  )}
                   {v.estado === 'pagado' && v.whatsapp_contacto && (
-                    <button className="btn-secondary py-1!" onClick={() => accion(() => ventasApi.reenviarWhatsapp(v.id_venta), `Reenviado a ${v.whatsapp_contacto}`)} aria-label={`Reenviar entradas por WhatsApp a ${v.whatsapp_contacto}`} title="Reenviar por WhatsApp"><PaperPlaneTilt size={16} weight="bold" aria-hidden /></button>
+                    <button className="btn-secondary py-1!" onClick={() => accion(() => ventasApi.reenviarWhatsapp(v.id_venta), `Reenviado a ${v.whatsapp_contacto}`)} aria-label={`Reenviar las entradas desde el bot de WhatsApp del complejo a ${v.whatsapp_contacto}`} title="Reenviar desde el bot del complejo"><PaperPlaneTilt size={16} weight="bold" aria-hidden /></button>
                   )}
                   {['pendiente', 'pagado'].includes(v.estado) && (
                     <button className="btn-secondary py-1!" onClick={async () => (await confirmar(v.estado === 'pagado' ? `Se devuelve el dinero al comprador y se liberan sus entradas.` : `Se liberan las entradas reservadas.`, { titulo: `${v.estado === 'pagado' ? 'Reembolsar' : 'Cancelar'} venta #${v.id_venta}`, aceptar: v.estado === 'pagado' ? 'Reembolsar' : 'Cancelar venta', peligro: true })) && accion(() => ventasApi.cancelar(v.id_venta))}>

@@ -48,6 +48,23 @@ r.get('/event/:id/correos', admin, asyncHandler(async (req, res) => {
   res.json(await correosDeVentas(ventas));
 }));
 
+/**
+ * GET /ventas/:id/entradas — links de descarga de cada ticket de una venta pagada, con el teléfono y el estado
+ * del correo: lo usa el botón de WhatsApp del admin (/admin/ventas) para enviarle las entradas al comprador.
+ */
+r.get('/ventas/:id/entradas', admin, asyncHandler(async (req, res) => {
+  const [[venta]] = await pool.query(
+    `SELECT v.id_venta, v.estado, v.monto_total, v.whatsapp_contacto AS whatsapp, e.id_tenant, e.nombre AS evento,
+            CONCAT_WS(' ', u.nombre, u.apellido) AS comprador, u.email
+       FROM ventas v JOIN eventos e ON e.id_evento = v.id_evento JOIN usuarios u ON u.id_usuario = v.id_usuario
+      WHERE v.id_venta = ?`, [Number(req.params.id)]);
+  if (!venta || venta.id_tenant !== req.tenant.id_tenant) throw new AppError(404, 'Venta no encontrada');
+  if (venta.estado !== 'pagado') throw new AppError(409, 'Las entradas se envían cuando la venta está pagada');
+  const [conLinks] = await correosDeVentas([venta]);
+  delete conLinks.id_tenant;
+  res.json(conLinks);
+}));
+
 r.post('/ventas/:id/reenviar-correo', admin, asyncHandler(async (req, res) => {
   const [[v]] = await pool.query('SELECT e.id_tenant FROM ventas v JOIN eventos e ON e.id_evento = v.id_evento WHERE v.id_venta = ?', [Number(req.params.id)]);
   if (!v || v.id_tenant !== req.tenant.id_tenant) throw new AppError(404, 'Venta no encontrada');
