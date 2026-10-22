@@ -3,6 +3,8 @@ const Pago = require('../models/Pago');
 const Venta = require('../models/Venta');
 const Ticket = require('../models/Ticket');
 const SalesLink = require('../models/SalesLink');
+const TipoTicket = require('../models/TipoTicket');
+const Evento = require('../models/Evento');
 const { MercadoPagoToken } = require('../models/MercadoPagoToken');
 const { conCredenciales } = require('./mercadopagoTokens');
 const { Suscripcion } = require('../models/Suscripcion');
@@ -49,6 +51,37 @@ const aprobarVenta = async (conn, idVenta, idPago, referencia = null) => {
   await Venta.setEstado(idVenta, 'pagado', conn);
   await Ticket.validarPorVenta(idVenta, conn);
   return { cambio: true, venta };
+};
+
+/**
+ * Descuenta el stock de una venta cuyo pago MercadoPago acaba de aprobar. Llamar dentro de la transacción
+ * del pago, con la venta bloqueada (Venta.lockById). Mismo criterio para todos los canales (venta directa,
+ * vendedores, links del complejo). Devuelve:
+ *   true   stock descontado (o ya lo estaba: idempotente ante notificaciones repetidas)
+ *   false  no alcanza el stock del evento o el cupo del link (otra compra aprobada se lo llevó): no se
+ *          descontó nada y el llamador debe cancelar la venta y reembolsar
+ * Orden: primero se verifica todo con las filas bloqueadas y recién después se modifica, así un fallo
+ * parcial no deja descuentos a medias.
+ */
+const confirmarStockDeVenta = async (conn, venta) => {
+  const pendienteDeEvento = Number(venta.stock_descontado) === 0;
+  if (pendienteDeEvento) {
+    const [porTipo] = await conn.query(
+      "SELECT id_tipo, COUNT(*) AS n FROM tickets WHERE id_venta = ? AND estado IN ('pendiente','valido') GROUP BY id_tipo",
+      [venta.id_venta]
+    );
+    if (porTipo.length) {
+      const tipos = new Map((await TipoTicket.lockByIds(porTipo.map((t) => t.id_tipo), conn)).map((t) => [t.id_tipo, t]));
+      if (porTipo.some(({ id_tipo, n }) => (tipos.get(id_tipo)?.stock_disponible ?? 0) < n)) return false;
+    }
+    // Cupo propio del link del complejo (si la venta vino de uno): se descuenta sólo si alcanza
+    if ((await SalesLink.descontarPorVenta(conn, venta.id_venta)) === false) return false;
+    for (const { id_tipo, n } of porTipo) await TipoTicket.descontarStock(id_tipo, n, conn);
+    await conn.query('UPDATE ventas SET stock_descontado = 1 WHERE id_venta = ?', [venta.id_venta]);
+    await Evento.actualizarEstadoPorStock(venta.id_evento, conn);
+    return true;
+  }
+  return (await SalesLink.descontarPorVenta(conn, venta.id_venta)) !== false;
 };
 
 /**
@@ -146,14 +179,14 @@ const procesarPagoMercadoPago = async (ambito, paymentId) => {
           reembolsoTardio = { idPago, paymentId: String(pagoMp.id) };
           return { tipo, id: venta.id_venta, estado: 'reembolsado' };
         }
-        // Link de venta del admin: su stock se descuenta recién ahora, con el pago confirmado por MercadoPago.
-        // Si otra compra aprobada se llevó el último cupo (o el link único ya se usó), se cancela y reembolsa.
-        if (venta.estado === 'pendiente' && (await SalesLink.descontarPorVenta(conn, venta.id_venta)) === false) {
+        // El stock (del evento y, si corresponde, del link) se descuenta recién ahora, con el pago confirmado.
+        // Si otra compra aprobada se llevó las últimas entradas, se cancela y se reembolsa: nunca se sobrevende.
+        if (venta.estado === 'pendiente' && !(await confirmarStockDeVenta(conn, venta))) {
           const { liberarVenta } = require('../controllers/ventasController'); // diferido: dependencia circular
           await liberarVenta(conn, venta, 'cancelado');
-          await Pago.actualizar(idPago, { estado: 'aprobado', referencia_externa: String(pagoMp.id), detalle: 'Link agotado: se reembolsa' }, conn);
+          await Pago.actualizar(idPago, { estado: 'aprobado', referencia_externa: String(pagoMp.id), detalle: 'Sin stock al aprobarse: se reembolsa' }, conn);
           reembolsoTardio = { idPago, paymentId: String(pagoMp.id) };
-          return { tipo, id: venta.id_venta, estado: 'reembolsado', motivo: 'Link agotado' };
+          return { tipo, id: venta.id_venta, estado: 'reembolsado', motivo: 'Sin stock' };
         }
         const r = await aprobarVenta(conn, venta.id_venta, idPago, String(pagoMp.id));
         if (r.cambio) enviarWhatsapp = venta.id_venta;
@@ -188,4 +221,4 @@ const reembolsarEnMercadoPago = async (venta) => {
   for (const p of pagos) await conCredenciales(venta.id_tenant, (cred) => mp.reembolsar(cred, p.referencia_externa));
 };
 
-module.exports = { metodosDisponibles, metodosVendedor, aprobarVenta, preferenciaDeVenta, preferenciaDeSuscripcion, procesarPagoMercadoPago, reembolsarEnMercadoPago };
+module.exports = { metodosDisponibles, metodosVendedor, aprobarVenta, confirmarStockDeVenta, preferenciaDeVenta, preferenciaDeSuscripcion, procesarPagoMercadoPago, reembolsarEnMercadoPago };

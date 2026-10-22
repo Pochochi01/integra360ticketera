@@ -241,3 +241,58 @@ Los tickets reales con QR siguen en `tickets`, y la Portería los valida igual q
 - **Webhook por complejo:** actualiza la vista `sales_link_tickets`, el stock y emite los tickets.
 - **Token por vencer:** se renueva con el `refresh_token`.
 - **Link pausado:** la página lo informa y el checkout se rechaza. Otro complejo no puede modificar el link.
+
+## Stock uniforme por evento (migración 014)
+
+**Las ventas con MercadoPago descuentan el stock del evento sólo cuando el pago se aprueba**, en todos los canales. Crear la preferencia no descuenta nada; el descuento lo hace `pagosService.confirmarStockDeVenta` dentro de la transacción del webhook (o de la vuelta del comprador):
+
+1. Bloquea los tipos de entrada y verifica que alcance el stock (y el cupo del link del complejo, si la venta viene de uno).
+2. Si alcanza, descuenta todo junto, marca `ventas.stock_descontado = 1` y recalcula el estado del evento (`agotado` en 0).
+3. Si no alcanza (otra compra aprobada se llevó las últimas entradas), no descuenta nada: cancela la venta y **reembolsa** el pago. Nunca se sobrevende.
+
+| Venta | ¿Cuándo descuenta stock? |
+|---|---|
+| MercadoPago (directa, vendedor, link del complejo, comprador con cuenta) | al aprobarse el pago |
+| Efectivo / transferencia (cobro manual) | al reservar: el admin confirma el cobro después |
+| Cortesías, emisión corporativa e invitaciones | al emitir |
+
+- Una venta de MercadoPago pendiente no retiene stock. Si vence o se rechaza, no hay nada que devolver.
+- Los asientos numerados sí se retienen durante la reserva (30 min), para que dos personas no paguen la misma butaca.
+- Con stock 0, cualquier canal responde 409. Vista **`events`**: stock del evento = suma de sus tipos a la venta.
+
+### Checkout único: `POST /api/ventas/checkout`
+
+| Canal | Cuerpo |
+|---|---|
+| Venta directa (página del evento o panel del admin) | `{ event_id, items: [{ id_tipo, cantidad }], comprador }` |
+| Link de vendedor | `{ codigo_link \| link_id, items?, comprador }` |
+| Link del complejo | `{ linkId, cantidad?, comprador }` |
+
+`comprador = { nombre, email, telefono }`. Responde `201 { init_point, id_venta, monto_total, cantidad, canal }`. Los tres comparten el núcleo: validación de la compra, reserva sin descontar stock y preferencia con el token del complejo dueño del evento. `POST /api/pagos/crear` queda como alias del link de vendedor.
+
+### Administración de eventos (`/admin/eventos`)
+
+```http
+GET  /api/admin/event/:id          evento + tipos + stock total + últimos 20 cambios auditados
+POST /api/admin/event/:id/update   { nombre?, fecha?, lugar?, descripcion?, limite_por_persona?,
+                                     agregar_stock?: [{ id_tipo, cantidad }] }   (también PUT)
+```
+
+- **Agregar entradas** suma a `stock_total` y `stock_disponible` (cantidad entre 1 y 100000). Nunca resta: lo vendido no se toca, y la edición del tipo no deja bajar el cupo por debajo de lo vendido.
+- Todo ocurre en una transacción con filas bloqueadas y ajustes relativos: un pago aprobado al mismo tiempo no se pisa.
+- Si el evento estaba agotado, vuelve a `publicado` y se avisa a la lista de espera.
+- No se edita un evento cancelado o finalizado, y la fecha nueva debe ser futura.
+- **Auditoría:** cada cambio queda en `auditoria_eventos` con quién, cuándo y los valores antes / después. El panel lo muestra en **Historial de cambios**.
+- En el panel: botón **+ Entradas** por tipo, resumen de stock (disponibles / vendidas / cupo) y **Cobrar con MercadoPago**, que es la venta directa: el admin carga al comprador y obtiene el link de pago.
+
+### Pruebas (4 nuevas, 15 en total)
+
+- **Tres canales** (directa, vendedor, link del complejo) por `/api/ventas/checkout`: crear la preferencia no descuenta; el pago aprobado descuenta exactamente lo comprado. La página pública del evento ve el mismo stock al instante, y el alias `/api/pagos/crear` pasa por el mismo checkout.
+- **Rechazos y vencimientos:** un pago rechazado y una reserva vencida no cambian el stock.
+- **Agotamiento:** con 3 entradas, dos compras de 2 se aceptan; la primera aprobada descuenta y la segunda se reembolsa. Al llegar a 0 el evento queda `agotado` y los tres canales responden 409.
+- **Admin:**
+  - comprador → 403, otro complejo → 404;
+  - cantidad negativa, tipo de otro evento o fecha pasada → 400;
+  - edita nombre y lugar, agrega 10 entradas, el evento vuelve a `publicado` y quedan las dos entradas de auditoría;
+  - las entradas nuevas se venden;
+  - no se puede bajar el cupo por debajo de lo vendido.

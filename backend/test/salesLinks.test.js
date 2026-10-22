@@ -370,3 +370,142 @@ test('estadísticas: reflejan el pago cuando MercadoPago lo aprueba (no antes)',
   assert.deepEqual({ unidades: canal.unidades, monto: canal.monto }, { unidades: 2, monto: 2000 });
   assert.equal(despues.por_metodo.find((m) => m.metodo === 'mercadopago').monto, despues.generales.ingresos_mercadopago);
 });
+
+// ── Stock uniforme por evento: se descuenta sólo con el pago aprobado, en todos los canales ─────────
+
+const stockTipo = async (idTipo) => (await pool.query('SELECT stock_disponible FROM tipos_ticket WHERE id_tipo = ?', [idTipo]))[0][0].stock_disponible;
+const estadoEvento = async (idEvento) => (await pool.query('SELECT estado FROM eventos WHERE id_evento = ?', [idEvento]))[0][0].estado;
+/** Link de vendedor del complejo 1 que no fija producto (lo crea si el seed no tiene uno). */
+const linkVendedor = async () => {
+  const [[l]] = await pool.query(
+    `SELECT l.codigo FROM links_venta l JOIN vendedores v ON v.id_vendedor = l.id_vendedor
+      WHERE v.id_tenant = 1 AND v.estado = 'activo' AND l.activo AND l.id_tipo IS NULL AND l.cantidad IS NULL
+        AND (l.id_evento IS NULL OR l.id_evento = ?) LIMIT 1`, [datos[1].id_evento]);
+  if (l) return l.codigo;
+  const [[v]] = await pool.query("SELECT id_vendedor FROM vendedores WHERE id_tenant = 1 AND estado = 'activo' LIMIT 1");
+  assert.ok(v, 'el seed debe tener un vendedor activo en el complejo 1');
+  await pool.query('INSERT INTO links_venta (id_vendedor, codigo, activo) VALUES (?, ?, 1)', [v.id_vendedor, 'testvend01']);
+  return 'testvend01';
+};
+const comprar = (body) => {
+  comprador++;
+  return api('POST', '/ventas/checkout', { body: { comprador: { nombre: `Canal ${comprador}`, email: `canal${comprador}@test.com`, telefono: `+54 9 11 6${String(comprador).padStart(3, '0')} 0000` }, ...body } });
+};
+const items = (cantidad) => [{ id_tipo: datos[1].id_tipo, cantidad }];
+
+test('los tres canales usan /api/ventas/checkout: el stock del evento baja sólo al aprobarse el pago', async () => {
+  const codigo = await linkVendedor();
+  const { body: link } = await crearLink(1, { stock_total: 50 });
+  const canales = [
+    ['directa', { event_id: datos[1].id_evento, items: items(2) }, 2],
+    ['vendedor', { codigo_link: codigo, id_evento: datos[1].id_evento, items: items(3) }, 3],
+    ['link_complejo', { linkId: link.id, cantidad: 2 }, 2],
+  ];
+  for (const [canal, cuerpo, n] of canales) {
+    const antes = await stockTipo(datos[1].id_tipo);
+    const r = await comprar(cuerpo);
+    assert.equal(r.status, 201, `${canal}: ${JSON.stringify(r.body)}`);
+    assert.equal(r.body.canal, canal);
+    assert.ok(r.body.init_point);
+    assert.equal(cuentaDeToken.get(ultimaPreferencia().access_token), datos[1].mpUser, `${canal}: cobra la cuenta del complejo`);
+    assert.equal(await stockTipo(datos[1].id_tipo), antes, `${canal}: crear la preferencia no descuenta stock`);
+
+    await webhook(pagar(ultimaPreferencia()), datos[1].mpUser);
+    assert.equal(await stockTipo(datos[1].id_tipo), antes - n, `${canal}: el pago aprobado descuenta ${n}`);
+    assert.equal(await estadoVenta(r.body.id_venta), 'pagado');
+    // Sincronizado: la página pública del evento ve el mismo stock en el momento
+    const publico = await api('GET', `/eventos/${datos[1].id_evento}`);
+    assert.equal(publico.body.tipos.find((t) => t.id_tipo === datos[1].id_tipo).stock_disponible, antes - n);
+  }
+  // El alias histórico del vendedor también pasa por el checkout único
+  const alias = await api('POST', '/pagos/crear', { body: { link_id: codigo, id_evento: datos[1].id_evento, items: items(1), comprador: { nombre: 'Alias', email: 'alias@test.com', telefono: '+54 9 11 6999 0000' } } });
+  assert.equal(alias.status, 201, JSON.stringify(alias.body));
+  assert.equal(alias.body.canal, 'vendedor');
+});
+
+test('pagos rechazados y reservas vencidas no tocan el stock del evento', async () => {
+  const antes = await stockTipo(datos[1].id_tipo);
+  const r = await comprar({ event_id: datos[1].id_evento, items: items(4) });
+  await webhook(pagar(ultimaPreferencia(), 'rejected'), datos[1].mpUser);
+  assert.equal(await stockTipo(datos[1].id_tipo), antes);
+  await pool.query('UPDATE ventas SET expira_en = NOW() - INTERVAL 1 MINUTE WHERE id_venta = ?', [r.body.id_venta]);
+  await require('../src/controllers/ventasController').expirarPendientes();
+  assert.equal(await estadoVenta(r.body.id_venta), 'cancelado');
+  assert.equal(await stockTipo(datos[1].id_tipo), antes, 'cancelar una venta que no descontó no suma stock');
+});
+
+test('stock agotado: el último cupo lo gana el primer pago aprobado y ningún canal permite vender más', async () => {
+  const codigo = await linkVendedor();
+  const { body: link } = await crearLink(1, { stock_total: 20 });
+  // Sólo quedan 3 entradas en todo el evento
+  await pool.query('UPDATE tipos_ticket SET stock_disponible = 0 WHERE id_evento = ? AND id_tipo <> ?', [datos[1].id_evento, datos[1].id_tipo]);
+  await pool.query('UPDATE tipos_ticket SET stock_disponible = 3 WHERE id_tipo = ?', [datos[1].id_tipo]);
+
+  const a = await comprar({ event_id: datos[1].id_evento, items: items(2) });
+  const prefA = ultimaPreferencia();
+  const b = await comprar({ codigo_link: codigo, id_evento: datos[1].id_evento, items: items(2) });
+  const prefB = ultimaPreferencia();
+  assert.equal(a.status, 201);
+  assert.equal(b.status, 201, 'sin pagos aprobados todavía hay 3 disponibles');
+
+  await webhook(pagar(prefA), datos[1].mpUser);
+  assert.equal(await stockTipo(datos[1].id_tipo), 1);
+  const rb = await webhook(pagar(prefB), datos[1].mpUser);
+  assert.equal(rb.body.estado, 'reembolsado', 'B pagó 2 y sólo queda 1: se reembolsa, no se sobrevende');
+  assert.equal(await estadoVenta(b.body.id_venta), 'cancelado');
+  assert.equal(await stockTipo(datos[1].id_tipo), 1);
+
+  const c = await comprar({ linkId: link.id, cantidad: 1 });
+  assert.equal(c.status, 201);
+  await webhook(pagar(ultimaPreferencia()), datos[1].mpUser);
+  assert.equal(await stockTipo(datos[1].id_tipo), 0);
+  assert.equal(await estadoEvento(datos[1].id_evento), 'agotado');
+
+  for (const cuerpo of [
+    { event_id: datos[1].id_evento, items: items(1) },
+    { codigo_link: codigo, id_evento: datos[1].id_evento, items: items(1) },
+    { linkId: link.id, cantidad: 1 },
+  ]) {
+    const r = await comprar(cuerpo);
+    assert.equal(r.status, 409, `bloqueado: ${JSON.stringify(cuerpo)} → ${JSON.stringify(r.body)}`);
+  }
+});
+
+test('admin: edita el evento y agrega entradas (sin poder descontar), con auditoría; vuelve a vender', async () => {
+  const id = datos[1].id_evento;
+  const url = `/admin/event/${id}/update`;
+  const tokenComprador = jwt.sign({ id_usuario: 1, rol: 'comprador' }, process.env.JWT_SECRET);
+  assert.equal((await api('POST', url, { token: tokenComprador, body: { nombre: 'X' } })).status, 403);
+  assert.equal((await api('POST', url, { token: datos[2].token, body: { nombre: 'X' } })).status, 404, 'otro complejo no edita');
+  assert.equal((await api('POST', url, { token: datos[1].token, body: { agregar_stock: [{ id_tipo: datos[1].id_tipo, cantidad: -5 }] } })).status, 400);
+  assert.equal((await api('POST', url, { token: datos[1].token, body: { agregar_stock: [{ id_tipo: datos[2].id_tipo, cantidad: 5 }] } })).status, 400, 'tipo de otro evento');
+  assert.equal((await api('POST', url, { token: datos[1].token, body: { fecha: '2020-01-01 20:00:00' } })).status, 400);
+
+  const [[antes]] = await pool.query('SELECT stock_total, stock_disponible FROM tipos_ticket WHERE id_tipo = ?', [datos[1].id_tipo]);
+  const r = await api('POST', url, { token: datos[1].token, body: {
+    nombre: 'Festival editado', lugar: 'Nuevo campo', agregar_stock: [{ id_tipo: datos[1].id_tipo, cantidad: 10 }],
+  } });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.nombre, 'Festival editado');
+  assert.equal(r.body.lugar, 'Nuevo campo');
+  const tipo = r.body.tipos.find((t) => t.id_tipo === datos[1].id_tipo);
+  assert.equal(tipo.stock_total, antes.stock_total + 10);
+  assert.equal(tipo.stock_disponible, antes.stock_disponible + 10);
+  assert.equal(r.body.estado, 'publicado', 'deja de estar agotado');
+  assert.deepEqual(r.body.auditoria.slice(0, 2).map((a) => a.accion).sort(), ['agregar_stock', 'editar_evento']);
+  const agregado = r.body.auditoria.find((a) => a.accion === 'agregar_stock');
+  assert.equal(agregado.detalle.cantidad, 10);
+  assert.deepEqual(agregado.detalle.stock_disponible, { antes: antes.stock_disponible, despues: antes.stock_disponible + 10 });
+  assert.ok(agregado.usuario);
+
+  // Las entradas nuevas se venden por cualquier canal
+  const v = await comprar({ event_id: id, items: items(1) });
+  assert.equal(v.status, 201);
+  await webhook(pagar(ultimaPreferencia()), datos[1].mpUser);
+  assert.equal(await stockTipo(datos[1].id_tipo), antes.stock_disponible + 9);
+
+  // Editar el cupo del tipo no puede bajar de lo vendido
+  const vendidos = tipo.stock_total - tipo.stock_disponible + 1;
+  const bajar = await api('PUT', `/eventos/tipos/${datos[1].id_tipo}`, { token: datos[1].token, body: { stock_total: vendidos - 1 } });
+  assert.equal(bajar.status, 409);
+});

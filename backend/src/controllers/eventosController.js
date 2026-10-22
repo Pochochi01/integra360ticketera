@@ -216,3 +216,4 @@ exports.listaEsperaPorTipo = asyncHandler(async (req, res) => {
   await tipoDelTenant(req.params.idTipo, req);
   res.json(await ListaEspera.findByTipo(req.params.idTipo));
 });
+exports.validarEvento = validarEvento;

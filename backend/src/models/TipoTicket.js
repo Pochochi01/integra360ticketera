@@ -23,21 +23,24 @@ const TipoTicket = {
     return TipoTicket.findById(r.insertId);
   },
 
-  /** Al cambiar stock_total se ajusta stock_disponible en la misma diferencia. */
-  update: async (id, d) => {
-    const actual = await TipoTicket.findById(id);
+  /**
+   * Al cambiar stock_total se ajusta stock_disponible en la misma diferencia. El ajuste es RELATIVO y con la
+   * fila bloqueada: un pago aprobado al mismo tiempo (que descuenta stock) no se pisa.
+   */
+  update: async (id, d) => pool.withTransaction(async (conn) => {
+    const [[actual]] = await conn.query('SELECT * FROM tipos_ticket WHERE id_tipo = ? FOR UPDATE', [id]);
     if (!actual) return null;
     const nuevoTotal = d.stock_total !== undefined ? Number(d.stock_total) : actual.stock_total;
     const vendidos = actual.stock_total - actual.stock_disponible;
     if (nuevoTotal < vendidos) return { error: `No se puede bajar el stock por debajo de lo vendido (${vendidos})` };
-    await pool.query(
-      `UPDATE tipos_ticket SET nombre_tipo = ?, precio = ?, stock_total = ?, stock_disponible = ?, condiciones = ?,
+    await conn.query(
+      `UPDATE tipos_ticket SET nombre_tipo = ?, precio = ?, stock_total = ?, stock_disponible = stock_disponible + ?, condiciones = ?,
               venta_desde = ?, venta_hasta = ?, solo_admin = ?, activo = ? WHERE id_tipo = ?`,
       [
         d.nombre_tipo ?? actual.nombre_tipo,
         d.precio ?? actual.precio,
         nuevoTotal,
-        nuevoTotal - vendidos,
+        nuevoTotal - actual.stock_total,
         d.condiciones ?? actual.condiciones,
         d.venta_desde !== undefined ? d.venta_desde || null : actual.venta_desde,
         d.venta_hasta !== undefined ? d.venta_hasta || null : actual.venta_hasta,
@@ -46,8 +49,12 @@ const TipoTicket = {
         id,
       ]
     );
-    return TipoTicket.findById(id);
-  },
+    return TipoTicket.findById(id, conn);
+  }),
+
+  /** Suma entradas al cupo (nunca resta): total y disponible crecen lo mismo. */
+  agregarStock: (id, cantidad, db) =>
+    db.query('UPDATE tipos_ticket SET stock_total = stock_total + ?, stock_disponible = stock_disponible + ? WHERE id_tipo = ?', [cantidad, cantidad, id]),
 
   remove: async (id) => (await pool.query('DELETE FROM tipos_ticket WHERE id_tipo = ?', [id]))[0].affectedRows,
 

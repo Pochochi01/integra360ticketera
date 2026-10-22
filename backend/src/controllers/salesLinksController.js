@@ -1,12 +1,8 @@
-const pool = require('../config/db');
 const Tenant = require('../models/Tenant');
-const Venta = require('../models/Venta');
 const SalesLink = require('../models/SalesLink');
-const pagos = require('../services/pagosService');
 const { MercadoPagoToken } = require('../models/MercadoPagoToken');
-const { crearSalesLink, datosVenta, disponible, urlVenta, conUrl } = require('../services/salesLinks');
+const { crearSalesLink, datosVenta, disponible, conUrl } = require('../services/salesLinks');
 const { limitarPorIp } = require('../middlewares/origenLinkPago');
-const { ejecutarVenta, liberarVenta } = require('./ventasController');
 const { AppError, asyncHandler } = require('../utils/errors');
 
 /**
@@ -17,10 +13,8 @@ const { AppError, asyncHandler } = require('../utils/errors');
  *  PATCH /api/ventas/link/:id          (admin) { activo }
  *  GET   /api/ventas/link/:id/tickets  (admin) compras del link con su estado (approved | pending | rejected …)
  *  GET   /api/publico/venta/:linkId    datos de la página pública
- *  POST  /api/ventas/checkout          { linkId, cantidad?, comprador: { nombre, email, telefono } } → { init_point }
+ *  POST  /api/ventas/checkout          { linkId, cantidad?, comprador } → { init_point }  (ver checkoutController)
  */
-const frontend = () => (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
-
 /** POST /api/ventas/link — tenant_id sale del JWT; si viene en el cuerpo debe coincidir. */
 exports.crear = asyncHandler(async (req, res) => {
   if (req.body.tenant_id !== undefined && Number(req.body.tenant_id) !== req.tenant.id_tenant) {
@@ -47,7 +41,7 @@ exports.tickets = asyncHandler(async (req, res) => res.json(await SalesLink.tick
 exports.verPublico = asyncHandler(async (req, res) => res.json(await datosVenta(req.params.linkId)));
 
 /**
- * Checkout (1/2): identifica el link y arma el pedido. El complejo sale del link, nunca del cuerpo.
+ * Checkout por link del complejo: identifica el link y arma el pedido. El complejo sale del link, nunca del cuerpo.
  * Controla disponibilidad y stock del link, pero NO lo descuenta: eso ocurre al aprobarse el pago.
  */
 exports.cargarLink = asyncHandler(async (req, _res, next) => {
@@ -70,35 +64,4 @@ exports.cargarLink = asyncHandler(async (req, _res, next) => {
   req.body.items = [{ id_tipo: link.id_tipo, cantidad }];
   req.body.metodo_pago = 'mercadopago';
   next();
-});
-
-/** Checkout (2/2), después de resolverComprador → validarCompra('link'): reserva + preferencia → init_point. */
-exports.checkout = asyncHandler(async (req, res) => {
-  const link = req.salesLink;
-  const cantidad = req.compra.cantidadTotal;
-  // El link fija el precio (puede diferir del precio de lista del tipo de entrada)
-  req.compra.total = Math.round(Number(link.precio) * cantidad * 100) / 100;
-
-  const minutos = Number(process.env.LINK_COMPRADOR_RESERVA_MIN || 30);
-  const vence = Math.min(Date.now() + minutos * 60 * 1000, new Date(req.compra.evento.fecha).getTime());
-  const { venta, tickets } = await ejecutarVenta(req.compra, { expiraEn: new Date(vence) });
-
-  let pref;
-  try {
-    await SalesLink.vincularVenta(venta.id_venta, link.id, cantidad);
-    const cp = req.body.comprador || {};
-    pref = await pagos.preferenciaDeVenta(venta, tickets.map((t) => ({ ...t, precio: Number(link.precio) })), {
-      pagador: { nombre: cp.nombre?.trim(), apellido: cp.apellido?.trim(), email: cp.email?.trim().toLowerCase(), telefono: req.body.whatsapp },
-      retorno: `${frontend()}/entrada/${venta.token_acceso}`,
-      fallo: `${urlVenta(link.id)}?pago=rechazado`,
-    });
-  } catch (e) {
-    // Sin preferencia no hay cómo pagar: se libera la reserva para no retener stock del evento
-    await pool.withTransaction(async (conn) => liberarVenta(conn, await Venta.lockById(venta.id_venta, conn), 'cancelado'));
-    throw e.status ? e : new AppError(502, `MercadoPago no pudo generar el pago: ${e.message}`);
-  }
-  // Cuenta conectada con credenciales de prueba → checkout sandbox
-  const cuenta = await MercadoPagoToken.publica(venta.id_tenant);
-  const initPoint = cuenta && !cuenta.live_mode && pref.sandbox_init_point ? pref.sandbox_init_point : pref.init_point;
-  res.status(201).json({ init_point: initPoint, id_venta: venta.id_venta, monto_total: req.compra.total, cantidad });
 });

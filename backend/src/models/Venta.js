@@ -56,10 +56,10 @@ const Venta = {
 
   create: async (d, db) => {
     const [r] = await db.query(
-      `INSERT INTO ventas (id_usuario, id_vendedor, id_evento, monto_total, estado, metodo_pago, tipo_venta, empresa, whatsapp_contacto, token_acceso, expira_en)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO ventas (id_usuario, id_vendedor, id_evento, monto_total, estado, metodo_pago, tipo_venta, empresa, whatsapp_contacto, token_acceso, expira_en, stock_descontado)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [d.id_usuario, d.id_vendedor || null, d.id_evento, d.monto_total, d.estado, d.metodo_pago, d.tipo_venta || 'normal',
-        d.empresa || null, d.whatsapp_contacto || null, d.token_acceso, d.expira_en || null]
+        d.empresa || null, d.whatsapp_contacto || null, d.token_acceso, d.expira_en || null, d.stock_descontado === false ? 0 : 1]
     );
     if (d.id_link) await db.query('INSERT INTO ventas_link (id_venta, id_link) VALUES (?, ?)', [r.insertId, d.id_link]);
     return r.insertId;

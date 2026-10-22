@@ -1,9 +1,8 @@
 const { Router } = require('express');
 const { seleccionarMercadoPago } = require('../middlewares/integraciones');
 const c = require('../controllers/pagosController');
-const links = require('../controllers/linksPagoController');
-const { soloLinkPublico, aplicarProductoDelLink } = require('../middlewares/origenLinkPago');
-const { validarCompra } = require('../middlewares/validarCompra');
+const { checkout } = require('../controllers/checkoutController');
+const { AppError } = require('../utils/errors');
 
 const r = Router();
 
@@ -13,7 +12,8 @@ const r = Router();
  * El link identifica al vendedor y a su complejo; la preferencia se crea con el access token OAuth de
  * ESE complejo y se devuelve el init_point para redirigir (window.location.href = init_point).
  */
-r.post('/crear', soloLinkPublico, links.verificarAlcance, aplicarProductoDelLink, links.resolverComprador, validarCompra('vendedor'), links.generar);
+// Alias histórico del link de vendedor: usa el mismo checkout único que /api/ventas/checkout
+r.post('/crear', (req, _res, next) => { if (!req.body?.codigo_link && !req.body?.link_id) return next(new AppError(400, 'Falta el link de pago (link_id)')); next(); }, checkout);
 
 // Webhooks de MercadoPago (sin JWT: se validan con firma + consulta del pago a la API)
 // URL única para configurar en la aplicación de MercadoPago (identifica el complejo por user_id)

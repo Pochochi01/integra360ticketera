@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
-import { eventosApi, mensajeError, urlUpload } from '../../api/client';
+import { adminApi, eventosApi, mensajeError, urlUpload } from '../../api/client';
+import { AgregarEntradasModal, CobroDirectoModal, HistorialEvento } from '../../components/admin/EventoAdminExtras';
+import { Plus, Wallet } from '@phosphor-icons/react';
 import { Alerta, Badge, Modal, Spinner, useConfirmar } from '../../components/ui';
 import { fecha, moneda } from '../../utils/format';
 
@@ -16,9 +18,13 @@ export default function AdminEventos() {
   const [error, setError] = useState('');
   const [aviso, setAviso] = useState('');
   const [subiendo, setSubiendo] = useState(false);
+  const [agregando, setAgregando] = useState(null); // tipo al que se le suman entradas
+  const [cobrando, setCobrando] = useState(false);
 
   const cargar = () => eventosApi.listarTodos().then(setEventos).catch((e) => setError(mensajeError(e)));
-  const cargarDetalle = (id) => eventosApi.detalle(id).then(setSeleccionado);
+  // Detalle público (asientos) + vista del admin (stock total y auditoría)
+  const cargarDetalle = (id) =>
+    Promise.all([eventosApi.detalle(id), adminApi.evento(id)]).then(([d, a]) => setSeleccionado({ ...d, ...a, asientos: d.asientos }));
   useEffect(() => { cargar(); }, []);
 
   const ejecutar = async (fn, exito) => {
@@ -38,10 +44,15 @@ export default function AdminEventos() {
   const guardarEvento = async (e) => {
     e.preventDefault();
     const d = { ...formEvento, limite_por_persona: formEvento.limite_por_persona || null };
-    const ok = await ejecutar(
-      () => (d.id_evento ? eventosApi.actualizar(d.id_evento, d) : eventosApi.crear(d)),
-      d.id_evento ? 'Evento actualizado' : 'Evento creado'
-    );
+    // Edición: datos principales por el endpoint auditado; estado y seating (no auditados) por el de siempre
+    const editar = async () => {
+      const { nombre, fecha: f, lugar, descripcion, limite_por_persona } = d;
+      await adminApi.actualizarEvento(d.id_evento, { nombre, fecha: f, lugar, descripcion: descripcion || '', limite_por_persona });
+      if (d.estado !== seleccionado.estado || !!d.tiene_seating !== !!seleccionado.tiene_seating) {
+        await eventosApi.actualizar(d.id_evento, { estado: d.estado, tiene_seating: d.tiene_seating });
+      }
+    };
+    const ok = await ejecutar(() => (d.id_evento ? editar() : eventosApi.crear(d)), d.id_evento ? 'Evento actualizado' : 'Evento creado');
     if (ok) setFormEvento(null);
   };
 
@@ -84,7 +95,7 @@ export default function AdminEventos() {
 
   return (
     <>
-      <div className="mb-4 flex items-center justify-between">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-3xl font-semibold tracking-tight">Administrar eventos</h1>
         <button className="btn-primary" onClick={() => setFormEvento(EVENTO_VACIO)}>+ Nuevo evento</button>
       </div>
@@ -122,6 +133,9 @@ export default function AdminEventos() {
                   </p>
                 </div>
                 <div className="flex flex-wrap gap-2">
+                  <button className="btn-primary py-1!" disabled={['cancelado', 'finalizado'].includes(seleccionado.estado)} onClick={() => setCobrando(true)}>
+                    <Wallet size={16} weight="bold" aria-hidden /> Cobrar con MercadoPago
+                  </button>
                   <button
                     className="btn-secondary py-1!"
                     disabled={seleccionado.estado === 'cancelado'}
@@ -145,6 +159,13 @@ export default function AdminEventos() {
                     Eliminar
                   </button>
                 </div>
+              </div>
+
+              {/* Stock del evento: suma de los tipos a la venta. Baja sólo con pagos confirmados */}
+              <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-3" data-testid="stock-evento">
+                <div className="rounded-xl bg-zinc-50 px-3 py-2 dark:bg-white/5"><p className="text-xs text-zinc-500 dark:text-zinc-400">Disponibles</p><p className="text-lg font-semibold tabular-nums">{seleccionado.stock_disponible}</p></div>
+                <div className="rounded-xl bg-zinc-50 px-3 py-2 dark:bg-white/5"><p className="text-xs text-zinc-500 dark:text-zinc-400">Vendidas</p><p className="text-lg font-semibold tabular-nums">{seleccionado.stock_total - seleccionado.stock_disponible}</p></div>
+                <div className="col-span-2 rounded-xl bg-zinc-50 px-3 py-2 sm:col-span-1 dark:bg-white/5"><p className="text-xs text-zinc-500 dark:text-zinc-400">Cupo total</p><p className="text-lg font-semibold tabular-nums">{seleccionado.stock_total}</p></div>
               </div>
 
               <div>
@@ -172,7 +193,7 @@ export default function AdminEventos() {
                   <button className="btn-secondary py-1!" onClick={() => setFormTipo(TIPO_VACIO)}>+ Tipo</button>
                 </div>
                 <div className="overflow-x-auto">
-                  <table className="tabla">
+                  <table className="tabla [&_td]:pr-4 [&_th]:pr-4">
                     <thead className="text-left text-zinc-500 dark:text-zinc-400">
                       <tr><th className="py-2">Tipo</th><th>Precio</th><th>Stock</th><th>Condición</th><th /></tr>
                     </thead>
@@ -180,11 +201,14 @@ export default function AdminEventos() {
                       {seleccionado.tipos.map((t) => (
                         <tr key={t.id_tipo} className={t.activo ? '' : 'opacity-50'}>
                           <td className="py-2">{t.nombre_tipo} {t.solo_admin ? <span className="text-xs text-indigo-600 dark:text-indigo-400">(admin)</span> : null}</td>
-                          <td>{moneda(t.precio)}</td>
-                          <td>{t.stock_disponible}/{t.stock_total}</td>
+                          <td className="whitespace-nowrap">{moneda(t.precio)}</td>
+                          <td className="whitespace-nowrap">{t.stock_disponible} / {t.stock_total}</td>
                           <td className="text-xs text-zinc-500 dark:text-zinc-400">{t.venta_hasta ? `hasta ${fecha(t.venta_hasta)}` : t.condiciones}</td>
                           <td className="whitespace-nowrap text-right">
-                            <button className="text-indigo-600 dark:text-indigo-400 hover:underline" onClick={() => setFormTipo({ ...t, venta_hasta: t.venta_hasta?.slice(0, 16).replace(' ', 'T') || '', solo_admin: !!t.solo_admin })}>Editar</button>
+                            <button className="inline-flex items-center gap-0.5 font-medium text-emerald-700 hover:underline dark:text-emerald-400" onClick={() => setAgregando(t)} aria-label={`Agregar entradas a ${t.nombre_tipo}`}>
+                              <Plus size={14} weight="bold" aria-hidden /> Entradas
+                            </button>
+                            <button className="ml-3 text-indigo-600 dark:text-indigo-400 hover:underline" onClick={() => setFormTipo({ ...t, venta_hasta: t.venta_hasta?.slice(0, 16).replace(' ', 'T') || '', solo_admin: !!t.solo_admin })}>Editar</button>
                             <button className="ml-3 text-rose-600 dark:text-rose-400 hover:underline" onClick={() => ejecutar(() => eventosApi.eliminarTipo(t.id_tipo), 'Tipo eliminado/desactivado')}>Quitar</button>
                           </td>
                         </tr>
@@ -193,6 +217,8 @@ export default function AdminEventos() {
                   </table>
                 </div>
               </div>
+
+              <HistorialEvento auditoria={seleccionado.auditoria} />
 
               {!!seleccionado.tiene_seating && (
                 <div>
@@ -247,6 +273,16 @@ export default function AdminEventos() {
           </form>
         </Modal>
       )}
+
+      {agregando && (
+        <AgregarEntradasModal
+          evento={seleccionado}
+          tipo={agregando}
+          onClose={() => setAgregando(null)}
+          onListo={async (_ev, mensaje) => { setAgregando(null); await ejecutar(async () => {}, mensaje); }}
+        />
+      )}
+      {cobrando && <CobroDirectoModal evento={seleccionado} onClose={() => setCobrando(false)} />}
 
       {formAsientos && (
         <Modal titulo="Generar asientos" onClose={() => setFormAsientos(null)}>

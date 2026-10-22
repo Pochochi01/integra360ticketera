@@ -126,12 +126,18 @@ export const vendedorApi = {
 // Página /checkout/:linkId (pública): datos del complejo y creación del pago en MercadoPago
 export const pagosApi = {
   checkout: (linkId) => api.get(`/publico/checkout/${linkId}`, { headers: { 'X-Tenant': '' } }).then(datos),
-  crear: (d) => api.post('/pagos/crear', d, { headers: { 'X-Tenant': '' } }).then(datos),
+  // Checkout único de MercadoPago (el link de vendedor se identifica por link_id)
+  crear: (d) => api.post('/ventas/checkout', d, { headers: { 'X-Tenant': '' } }).then(datos),
 };
 
 // Panel del admin: estadísticas de un evento (el panel las vuelve a pedir cada 10 s)
 export const adminApi = {
   estadisticasEvento: (id) => api.get(`/admin/event/${id}/stats`).then(datos),
+  // Evento con stock total y auditoría; update edita datos y SUMA entradas ({ agregar_stock: [{ id_tipo, cantidad }] })
+  evento: (id) => api.get(`/admin/event/${id}`).then(datos),
+  actualizarEvento: (id, d) => api.post(`/admin/event/${id}/update`, d).then(datos),
+  // Venta directa con MercadoPago desde el panel: mismo checkout único que el resto de los canales
+  cobrarMercadoPago: (d) => api.post('/ventas/checkout', d).then(datos),
 };
 
 // Links de venta del admin con stock propio (/venta/:linkId). El stock baja sólo con el pago aprobado.

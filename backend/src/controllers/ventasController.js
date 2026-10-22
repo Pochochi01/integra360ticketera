@@ -21,8 +21,11 @@ const esStaffDe = (usuario, idTenant) => usuario.rol === 'superadmin' || (usuari
 
 /**
  * Crea la venta y sus tickets en una sola transacción.
- * Revalida con filas bloqueadas (FOR UPDATE) el límite por persona, el stock y los asientos,
- * de modo que dos compras simultáneas no puedan sobrevender.
+ * Revalida con filas bloqueadas (FOR UPDATE) el límite por persona, el stock y los asientos.
+ *
+ * Stock: las ventas con MercadoPago pendientes de pago NO descuentan stock (stock_descontado = 0): sólo se
+ * verifica que haya. El descuento ocurre al aprobarse el pago (pagosService.confirmarStockDeVenta), igual
+ * para todos los canales. El resto (cortesías, emisiones, efectivo, transferencia) descuenta al crear.
  */
 const ejecutarVenta = async (compra, { empresa = null, marcarPagado = false, expiraEn = null } = {}) => {
   const { evento, lineas, idTitular, tipoVenta, vendedor, whatsapp } = compra;
@@ -64,11 +67,13 @@ const ejecutarVenta = async (compra, { empresa = null, marcarPagado = false, exp
     }
 
     const pagado = total === 0 || marcarPagado;
+    const descontarAlAprobar = !pagado && metodoPago === 'mercadopago';
     const idVenta = await Venta.create(
       {
         id_usuario: idTitular, id_vendedor: vendedor?.id_vendedor, id_link: vendedor?.id_link, id_evento: evento.id_evento,
         monto_total: total, estado: pagado ? 'pagado' : 'pendiente', metodo_pago: metodoPago, tipo_venta: tipoVenta,
         empresa, whatsapp_contacto: whatsapp, token_acceso: generarTokenAcceso(), expira_en: pagado ? null : expiraEn,
+        stock_descontado: !descontarAlAprobar,
       },
       conn
     );
@@ -81,13 +86,13 @@ const ejecutarVenta = async (compra, { empresa = null, marcarPagado = false, exp
 
     const filas = [];
     for (const l of lineas) {
-      await TipoTicket.descontarStock(l.id_tipo, l.cantidad, conn);
+      if (!descontarAlAprobar) await TipoTicket.descontarStock(l.id_tipo, l.cantidad, conn);
       for (let i = 0; i < l.cantidad; i++) {
         filas.push([idVenta, l.id_tipo, idTitular, generarCodigo(), pagado ? 'valido' : 'pendiente', l.asientos[i] || null]);
       }
     }
     await Ticket.createMany(filas, conn);
-    await Evento.actualizarEstadoPorStock(evento.id_evento, conn);
+    if (!descontarAlAprobar) await Evento.actualizarEstadoPorStock(evento.id_evento, conn);
 
     return { venta: await Venta.findById(idVenta, conn), tickets: await Ticket.findByVenta(idVenta, conn) };
   });
@@ -108,6 +113,8 @@ const liberarVenta = async (conn, venta, nuevoEstado) => {
   await Ticket.setEstadoPorVenta(venta.id_venta, nuevoEstado === 'reembolsado' ? 'reembolsado' : 'cancelado', conn);
   await Venta.setEstado(venta.id_venta, nuevoEstado, conn);
   await Pago.cerrarPorVenta(venta.id_venta, nuevoEstado, conn);
+  // Una venta de MercadoPago que nunca se aprobó no había descontado stock: no hay nada que devolver
+  if (Number(venta.stock_descontado) === 0) return;
   for (const { id_tipo, n } of activos) {
     await TipoTicket.devolverStock(id_tipo, n, conn);
     await ListaEspera.notificarLiberacion(id_tipo, n, conn);
