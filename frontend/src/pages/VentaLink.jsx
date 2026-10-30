@@ -111,7 +111,6 @@ export default function VentaLink() {
               </span>
             )}
           </div>
-          {datos.reutilizable && datos.disponible && <p className="text-xs text-zinc-500 dark:text-zinc-400">Quedan {datos.stock_disponible} entradas en este link.</p>}
         </section>
 
         <aside className="card min-w-0 space-y-4 p-6 md:col-span-2">

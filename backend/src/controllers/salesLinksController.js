@@ -56,7 +56,7 @@ exports.cargarLink = asyncHandler(async (req, _res, next) => {
 
   const cantidad = link.reutilizable ? Number(req.body.cantidad || 1) : link.stock_total;
   if (!Number.isInteger(cantidad) || cantidad < 1 || cantidad > 50) throw new AppError(400, 'La cantidad debe ser un entero entre 1 y 50');
-  if (cantidad > link.stock_disponible) throw new AppError(409, `Quedan ${link.stock_disponible} entrada(s) en este link`, { stock_disponible: link.stock_disponible });
+  if (cantidad > link.stock_disponible) throw new AppError(409, 'No hay entradas suficientes para esa cantidad: probá con menos'); // sin revelar el stock al comprador
 
   req.tenant = await Tenant.findById(link.tenant_id);
   req.salesLink = link;
