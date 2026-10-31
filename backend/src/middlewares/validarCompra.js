@@ -29,7 +29,8 @@ const validarCompra = (tipoVenta = 'normal') => async (req, _res, next) => {
   try {
     const { id_evento, metodo_pago, items } = req.body;
     const esVendedor = tipoVenta === 'vendedor';
-    const esLink = tipoVenta === 'link';
+    const esPuerta = tipoVenta === 'puerta'; // boletería asistida: como 'link', con WhatsApp opcional
+    const esLink = tipoVenta === 'link' || esPuerta;
     const comoNormal = tipoVenta === 'normal' || esVendedor || esLink; // reglas de venta al público
     if (!id_evento) throw new AppError(400, 'id_evento es obligatorio');
     if (!Array.isArray(items) || items.length === 0) throw new AppError(400, 'Debe seleccionar al menos un tipo de ticket');
@@ -129,7 +130,7 @@ const validarCompra = (tipoVenta = 'normal') => async (req, _res, next) => {
     if (!whatsapp) whatsapp = (await Usuario.findById(idTitular))?.whatsapp;
     const whatsappNormalizado = whatsapp ? normalizarWhatsapp(whatsapp, pais) : null;
     if (whatsapp && !whatsappNormalizado) throw new AppError(400, 'Número de WhatsApp inválido (debe ser un celular, ej. +54 9 11 2345 6789)');
-    if (comoNormal && !whatsappNormalizado) throw new AppError(400, 'El número de WhatsApp es obligatorio para recibir las entradas');
+    if (comoNormal && !esPuerta && !whatsappNormalizado) throw new AppError(400, 'El número de WhatsApp es obligatorio para recibir las entradas');
 
     // El vendedor queda como canal de la venta (sin link público asociado)
     if (esVendedor) vendedor = { id_vendedor: req.vendedor.id_vendedor, id_link: req.linkVenta?.id_link || null };

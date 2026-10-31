@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { Check, Copy, DoorOpen, Key, ShieldCheck, Trash, UserPlus } from '@phosphor-icons/react';
 import { accesoApi, mensajeError, porterosApi } from '../../api/client';
 import { Alerta, Badge, Modal, Spinner, Tabs, Vacio, useConfirmar } from '../../components/ui';
 import ControlIngresos from '../../components/admin/estadisticas/ControlIngresos';
+import VentaPuerta from '../../components/admin/estadisticas/VentaPuerta';
 import { fecha } from '../../utils/format';
 
 /** Copia un valor y confirma con un check durante un instante. */
@@ -43,8 +45,11 @@ export default function AdminPorteros() {
   const [credenciales, setCredenciales] = useState(null); // { titulo, usuario, password }
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState('');
-  // Control de ingresos primero: es lo que se mira durante el evento
-  const [tab, setTab] = useState('ingresos');
+  // Pestaña en la URL: /admin/porteros/venta abre directo la venta en puerta (boletería)
+  const { pathname } = useLocation();
+  const navigate = useNavigate();
+  const [tab, setTabEstado] = useState(pathname.endsWith('/venta') ? 'venta' : 'ingresos');
+  const setTab = (t) => { setTabEstado(t); navigate(t === 'venta' ? '/admin/porteros/venta' : '/admin/porteros', { replace: true }); };
 
   const cargar = () => Promise.all([
     porterosApi.listar().then(setPorteros),
@@ -95,6 +100,7 @@ export default function AdminPorteros() {
           <p className="mt-1 text-zinc-500 dark:text-zinc-400">
             {tab === 'ingresos'
               ? 'Ingresos al evento en tiempo real, por tipo de entrada.'
+              : tab === 'venta' ? 'QR de compra para la puerta y cobro en boletería con Mercado Pago.'
               : <>Usuarios de la puerta: sólo pueden entrar a la Portería y escanear entradas. {activos} activo{activos === 1 ? '' : 's'}.</>}
           </p>
         </div>
@@ -106,9 +112,10 @@ export default function AdminPorteros() {
       </div>
       <Alerta onClose={() => setError('')}>{error}</Alerta>
 
-      <Tabs tabs={[['ingresos', 'Control de ingresos'], ['equipo', `Porteros (${porteros.length})`]]} activa={tab} onChange={setTab} />
+      <Tabs tabs={[['ingresos', 'Control de ingresos'], ['venta', 'Venta en puerta'], ['equipo', `Porteros (${porteros.length})`]]} activa={tab} onChange={setTab} />
 
       {tab === 'ingresos' && <ControlIngresos />}
+      {tab === 'venta' && <VentaPuerta />}
 
       {tab === 'equipo' && <div className="grid gap-8 lg:grid-cols-5">
         <section className="min-w-0 lg:col-span-3">

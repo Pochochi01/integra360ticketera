@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { CheckCircle, CurrencyCircleDollar, DoorOpen, Hourglass, Percent, Ticket, Trophy, UsersThree, Warning, WarningCircle } from '@phosphor-icons/react';
+import { CheckCircle, ClockCounterClockwise, CurrencyCircleDollar, DoorOpen, Hourglass, Percent, QrCode, Storefront, Ticket, Trophy, UsersThree, Warning, WarningCircle } from '@phosphor-icons/react';
 import { adminApi, eventosApi, mensajeError } from '../../../api/client';
 import { useTema } from '../../../context/TemaContext';
 import { Alerta, Skeleton, Vacio } from '../../ui';
@@ -57,12 +57,27 @@ const BarraUso = ({ uso, nivel, etiqueta }) => (
 );
 
 /** Evento por defecto: el próximo / en curso (desde 12 h antes); si no hay, el más reciente. */
-const eventoPorDefecto = (eventos) => {
+export const eventoPorDefecto = (eventos) => {
   const desde = Date.now() - 12 * 3600 * 1000;
   const proximos = eventos.filter((e) => new Date(String(e.fecha).replace(' ', 'T')).getTime() >= desde && e.estado !== 'cancelado')
     .sort((a, b) => new Date(a.fecha) - new Date(b.fecha));
   return (proximos[0] || [...eventos].sort((a, b) => new Date(b.fecha) - new Date(a.fecha))[0])?.id_evento || '';
 };
+/** Semáforo de capacidad (lugares libres): verde > 50 %, amarillo 10–50 %, rojo ≤ 10 % o agotado. */
+const CAPACIDAD = {
+  libre: { texto: 'Con lugar', icono: CheckCircle, clase: SEMAFORO.alto.clase, barra: SEMAFORO.alto.barra },
+  ajustada: { texto: 'Se llena', icono: Warning, clase: SEMAFORO.medio.clase, barra: SEMAFORO.medio.barra },
+  critica: { texto: 'Casi lleno', icono: WarningCircle, clase: SEMAFORO.bajo.clase, barra: SEMAFORO.bajo.barra },
+};
+const ORIGENES = { puerta_qr: 'QR de compra', puerta_asistida: 'Boletería' };
+const METODOS = { mercadopago: 'Mercado Pago', efectivo: 'Efectivo', transferencia: 'Transferencia', cortesia: 'Cortesía' };
+const ESTADOS_PAGO = {
+  approved: { texto: 'Aprobado', clase: SEMAFORO.alto.clase }, pending: { texto: 'Pendiente', clase: SEMAFORO.medio.clase },
+  rejected: { texto: 'Rechazado', clase: SEMAFORO.bajo.clase }, cancelled: { texto: 'Cancelado', clase: 'bg-zinc-100 text-zinc-600 dark:bg-white/10 dark:text-zinc-300' },
+  refunded: { texto: 'Reembolsado', clase: 'bg-sky-100 text-sky-800 dark:bg-sky-400/10 dark:text-sky-300' },
+};
+const hora = (f) => new Date(String(f).replace(' ', 'T')).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
+
 const ESTADOS_EVENTO = [['', 'Todos'], ['publicado', 'Publicados'], ['agotado', 'Agotados'], ['finalizado', 'Finalizados'], ['borrador', 'Borradores']];
 
 export default function ControlIngresos() {
@@ -203,6 +218,69 @@ export default function ControlIngresos() {
             <Kpi icono={CurrencyCircleDollar} tono="emerald" titulo="Total consumido" valor={importe(k.consumido)} detalle="Entradas que ya ingresaron" />
             <Kpi icono={CurrencyCircleDollar} tono="amber" titulo="Total pendiente" valor={importe(k.pendienteMonto)} detalle="Entradas sin ingresar" />
             <Kpi icono={Percent} tono="zinc" titulo="% general de ingreso" valor={`${k.uso}%`}><div className="mt-2"><Semaforo nivel={k.nivel} uso={k.uso} vendidas={k.vendidas} /></div></Kpi>
+          </div>
+
+          {/* Puerta: capacidad del lugar, ventas en portería y últimas operaciones (del evento completo) */}
+          <div className="grid gap-4 lg:grid-cols-3">
+            {(() => {
+              const g = datos.generales;
+              const c = CAPACIDAD[g.semaforo_capacidad] || CAPACIDAD.libre;
+              const Icono = c.icono;
+              return (
+                <Tarjeta titulo="Control de capacidad" accion={<span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold ${c.clase}`}><Icono size={13} weight="fill" aria-hidden />{c.texto}</span>}>
+                  <dl className="grid grid-cols-3 gap-2 text-center" data-testid="capacidad">
+                    {[['Capacidad', g.capacidad], ['Ingresados', g.ingresadas], ['Disponibles', g.capacidad_disponible]].map(([n, v]) => (
+                      <div key={n} className="rounded-xl bg-zinc-50 px-1 py-2 dark:bg-white/5">
+                        <dt className="text-[11px] text-zinc-500 dark:text-zinc-400">{n}</dt>
+                        <dd className="text-lg font-semibold tabular-nums">{entero.format(v)}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                  <div className="mt-3 h-2 overflow-hidden rounded-full bg-zinc-100 dark:bg-white/10" role="meter" aria-valuenow={Math.round(g.capacidad_utilizada)} aria-valuemin={0} aria-valuemax={100} aria-label={`Ocupación ${g.capacidad_utilizada}%`}>
+                    <div className={`h-full rounded-full transition-[width] duration-500 ${c.barra}`} style={{ width: `${Math.min(100, g.capacidad_utilizada)}%` }} />
+                  </div>
+                  <p className="mt-2 text-sm tabular-nums text-zinc-600 dark:text-zinc-300">Ocupación <b>{g.capacidad_utilizada}%</b> · libre {g.capacidad_disponible_pct}%</p>
+                </Tarjeta>
+              );
+            })()}
+
+            <Tarjeta titulo="Ventas en portería" accion={<Storefront size={18} weight="duotone" className="text-zinc-400" aria-hidden />}>
+              <div data-testid="ventas-puerta">
+                <p className="text-3xl font-semibold tabular-nums tracking-tight">{entero.format(datos.puerta.tickets)} <span className="text-base font-normal text-zinc-500 dark:text-zinc-400">ticket{datos.puerta.tickets === 1 ? '' : 's'}</span></p>
+                <p className="text-xl font-semibold tabular-nums">{importe(datos.puerta.monto)}</p>
+                <p className="text-xs text-zinc-500 dark:text-zinc-400">{pct(datos.puerta.monto, datos.generales.facturado)}% de la facturación del evento</p>
+                <dl className="mt-3 space-y-1.5 text-sm">
+                  {Object.entries(ORIGENES).map(([clave, nombre]) => {
+                    const o = datos.puerta.por_origen[clave];
+                    return (
+                      <div key={clave} className="flex items-center justify-between gap-2">
+                        <dt className="flex items-center gap-1.5 text-zinc-500 dark:text-zinc-400">{clave === 'puerta_qr' ? <QrCode size={15} weight="duotone" aria-hidden /> : <Storefront size={15} weight="duotone" aria-hidden />}{nombre}</dt>
+                        <dd className="tabular-nums">{entero.format(o.tickets)} · {importe(o.monto)}</dd>
+                      </div>
+                    );
+                  })}
+                </dl>
+              </div>
+            </Tarjeta>
+
+            <Tarjeta titulo="Últimas operaciones" accion={<ClockCounterClockwise size={18} weight="duotone" className="text-zinc-400" aria-hidden />}>
+              {datos.ultimas_operaciones.length === 0 ? (
+                <p className="text-sm text-zinc-500 dark:text-zinc-400">Todavía no hay operaciones.</p>
+              ) : (
+                <ul className="-my-1 max-h-64 divide-y divide-zinc-100 overflow-y-auto overscroll-contain dark:divide-white/5" data-testid="ultimas-operaciones">
+                  {datos.ultimas_operaciones.map((o) => (
+                    <li key={o.id_venta} className="flex items-center gap-3 py-2 text-sm">
+                      <span className="w-11 shrink-0 font-mono text-xs tabular-nums text-zinc-500 dark:text-zinc-400">{hora(o.fecha)}</span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate font-medium">{o.comprador}{o.tipos ? ` · ${o.tipos}` : ''}</span>
+                        <span className="block truncate text-xs text-zinc-500 dark:text-zinc-400">{o.cantidad} entrada{o.cantidad === 1 ? '' : 's'} · {METODOS[o.metodo_pago] || o.metodo_pago}{o.origen ? ` · ${ORIGENES[o.origen]}` : ''}</span>
+                      </span>
+                      <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold ${(ESTADOS_PAGO[o.estado_pago] || ESTADOS_PAGO.pending).clase}`}>{(ESTADOS_PAGO[o.estado_pago] || ESTADOS_PAGO.pending).texto}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </Tarjeta>
           </div>
 
           {k.vendidas === 0 ? (

@@ -20,6 +20,7 @@ import SuperPlataforma from './pages/super/SuperPlataforma';
 import Porteria from './pages/Porteria';
 import Checkout from './pages/Checkout';
 import VentaLink from './pages/VentaLink';
+import CompraRapida from './pages/CompraRapida';
 import AvisoActualizacion from './components/AvisoActualizacion';
 import VendedorPanel from './pages/vendedor/VendedorPanel';
 import AdminEventos from './pages/admin/AdminEventos';
@@ -96,6 +97,9 @@ export default function App() {
           {/* Link de pago del vendedor: página del complejo + formulario del comprador */}
           <Route path="/checkout/:linkId" element={<Checkout />} />
           <Route path="/venta/:linkId" element={<VentaLink />} />
+          {/* Compra rápida desde el QR de la puerta: general o de un tipo de entrada */}
+          <Route path="/comprar/evento/:idEvento" element={<CompraRapida />} />
+          <Route path="/comprar/:idEvento/:tipo" element={<CompraRapida />} />
           <Route path="/entrada/:token" element={<Entrada />} />
           <Route path="/login" element={<Login />} />
           <Route path="/registro" element={<Registro />} />
@@ -111,6 +115,7 @@ export default function App() {
 
           {/* Admin del tenant */}
           <Route path="/admin/porteros" element={<Protegida {...admin}><AdminPorteros /></Protegida>} />
+          <Route path="/admin/porteros/venta" element={<Protegida {...admin}><AdminPorteros /></Protegida>} />
           <Route path="/acceso" element={<Navigate to="/admin/porteros" replace />} />
           <Route path="/admin/eventos" element={<Protegida {...admin}><AdminEventos /></Protegida>} />
           <Route path="/admin/vendedores" element={<Protegida {...admin}><AdminVendedores /></Protegida>} />

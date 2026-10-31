@@ -38,6 +38,8 @@ const cargarEvento = asyncHandler(async (req, _res, next) => {
   req.origenPublico = true; // email obligatorio (comprobante de MercadoPago)
   req.body.id_evento = evento.id_evento;
   req.body.metodo_pago = 'mercadopago';
+  // Compra desde el QR de la puerta (/comprar/...): sólo ese origen se acepta desde afuera
+  req.origenVenta = req.body.origen === 'puerta_qr' ? 'puerta_qr' : null;
   next();
 });
 
@@ -46,6 +48,7 @@ const crear = asyncHandler(async (req, res) => {
   const link = req.salesLink || null;
   // Link reutilizable de un vendedor: la venta (y sus tickets) quedan atribuidas a él → «Mis ventas» y estadísticas
   if (link?.seller_id) req.compra.vendedor = { id_vendedor: link.seller_id, id_link: null };
+  if (req.origenVenta) req.compra.origen = req.origenVenta;
   // Un link del complejo fija su precio (puede diferir del precio de lista del tipo de entrada)
   if (link) req.compra.total = Math.round(Number(link.precio) * req.compra.cantidadTotal * 100) / 100;
 
@@ -63,7 +66,8 @@ const crear = asyncHandler(async (req, res) => {
       // Pago rechazado: vuelve a la página desde la que compró para reintentar
       fallo: link ? `${urlVenta(link.id)}?pago=rechazado`
         : req.linkVenta ? `${frontend()}/checkout/${req.linkVenta.codigo}?pago=rechazado`
-          : `${frontend()}/eventos/${venta.id_evento}?pago=rechazado`,
+          : req.origenVenta ? `${frontend()}/comprar/evento/${venta.id_evento}?pago=rechazado`
+            : `${frontend()}/eventos/${venta.id_evento}?pago=rechazado`,
     });
   } catch (e) {
     // Sin preferencia no hay cómo pagar: se cancela la reserva (no retenía stock, pero sí asientos)

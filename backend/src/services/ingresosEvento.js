@@ -19,6 +19,12 @@ const num = (x) => Number(x) || 0;
 const pct = (parte, total) => (total ? Math.round((parte / total) * 1000) / 10 : 0);
 /** Semáforo del uso: verde ≥ 70 %, amarillo 40–69 %, rojo < 40 %. */
 const semaforo = (uso) => (uso >= 70 ? 'alto' : uso >= 40 ? 'medio' : 'bajo');
+/** Semáforo de capacidad (lugares libres del total): verde > 50 %, amarillo 10–50 %, rojo ≤ 10 % o agotado. */
+const semaforoCapacidad = (libre) => (libre > 50 ? 'libre' : libre > 10 ? 'ajustada' : 'critica');
+const ESTADO_PAGO_SQL = `CASE WHEN v.estado = 'pagado' THEN 'approved' WHEN v.estado = 'reembolsado' THEN 'refunded'
+  WHEN v.estado = 'cancelado' THEN 'cancelled'
+  WHEN (SELECT p.estado FROM pagos p WHERE p.id_venta = v.id_venta ORDER BY p.id_pago DESC LIMIT 1) = 'rechazado' THEN 'rejected'
+  ELSE 'pending' END`;
 
 const ingresosEvento = async (idEvento, idTenant) => {
   const [[evento]] = await pool.query(
@@ -75,6 +81,37 @@ const ingresosEvento = async (idEvento, idTenant) => {
   const ultimos = porTipo.map((t) => t.ultimo_ingreso).filter(Boolean).sort();
   const uso = pct(ingresadas, vendidas);
 
+  // Ventas en puerta (QR de compra y boletería asistida): sólo pagadas
+  const [puertaFilas] = await pool.query(
+    `SELECT v.origen, COUNT(DISTINCT v.id_venta) AS ventas, COUNT(t.id_ticket) AS tickets
+       FROM ventas v JOIN tickets t ON t.id_venta = v.id_venta AND t.estado IN ('valido','usado')
+      WHERE v.id_evento = ? AND v.estado = 'pagado' AND v.origen IS NOT NULL
+      GROUP BY v.origen`, [idEvento]);
+  const [puertaMontos] = await pool.query(
+    `SELECT origen, COALESCE(SUM(monto_total), 0) AS monto FROM ventas
+      WHERE id_evento = ? AND estado = 'pagado' AND origen IS NOT NULL GROUP BY origen`, [idEvento]);
+  const puerta = { tickets: 0, ventas: 0, monto: 0, por_origen: {} };
+  for (const o of ['puerta_qr', 'puerta_asistida']) {
+    const f = puertaFilas.find((x) => x.origen === o) || {};
+    const m = puertaMontos.find((x) => x.origen === o) || {};
+    puerta.por_origen[o] = { tickets: num(f.tickets), ventas: num(f.ventas), monto: Math.round(num(m.monto) * 100) / 100 };
+    puerta.tickets += num(f.tickets); puerta.ventas += num(f.ventas); puerta.monto += puerta.por_origen[o].monto;
+  }
+
+  // Últimas operaciones del evento (cualquier canal), con tipos de entrada y estado del pago
+  const [ultimas] = await pool.query(
+    `SELECT v.id_venta, v.fecha_venta, v.metodo_pago, v.origen, v.monto_total, ${ESTADO_PAGO_SQL} AS estado_pago,
+            CONCAT_WS(' ', u.nombre, u.apellido) AS comprador,
+            (SELECT GROUP_CONCAT(DISTINCT tt.nombre_tipo ORDER BY tt.nombre_tipo SEPARATOR ', ')
+               FROM tickets t2 JOIN tipos_ticket tt ON tt.id_tipo = t2.id_tipo WHERE t2.id_venta = v.id_venta) AS tipos,
+            (SELECT COUNT(*) FROM tickets t3 WHERE t3.id_venta = v.id_venta) AS cantidad
+       FROM ventas v JOIN usuarios u ON u.id_usuario = v.id_usuario
+      WHERE v.id_evento = ?
+      ORDER BY v.fecha_venta DESC, v.id_venta DESC LIMIT 10`, [idEvento]);
+
+  const libre = capacidad ? Math.max(0, capacidad - ingresadas) : 0;
+  const librePct = pct(libre, capacidad);
+
   return {
     evento,
     generales: {
@@ -82,11 +119,17 @@ const ingresosEvento = async (idEvento, idTenant) => {
       facturado, consumido, pendiente_monto: Math.round((facturado - consumido) * 100) / 100,
       porcentaje_ingreso: uso, semaforo: semaforo(uso),
       capacidad, capacidad_utilizada: pct(ingresadas, capacidad),
+      capacidad_disponible: libre, capacidad_disponible_pct: librePct, semaforo_capacidad: semaforoCapacidad(librePct),
       ultimo_ingreso: ultimos.at(-1) || null,
     },
     por_tipo: porTipo,
+    puerta: { ...puerta, monto: Math.round(puerta.monto * 100) / 100 },
+    ultimas_operaciones: ultimas.map((u) => ({
+      id_venta: u.id_venta, fecha: u.fecha_venta, comprador: u.comprador, tipos: u.tipos, cantidad: num(u.cantidad),
+      metodo_pago: u.metodo_pago, origen: u.origen, estado_pago: u.estado_pago, monto: num(u.monto_total),
+    })),
     actualizado_en: new Date().toISOString(),
   };
 };
 
-module.exports = { ingresosEvento, semaforo };
+module.exports = { ingresosEvento, semaforo, semaforoCapacidad };

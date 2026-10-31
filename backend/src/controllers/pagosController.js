@@ -1,3 +1,4 @@
+const pool = require('../config/db');
 const { procesarPagoMercadoPago } = require('../services/pagosService');
 const mp = require('../services/mercadopagoService');
 const { MercadoPagoToken } = require('../models/MercadoPagoToken');
@@ -25,16 +26,35 @@ const procesar = async (req, res, ambito) => {
   const { tipo, dataId } = datosDeLaNotificacion(req);
   if (tipo !== 'payment' || !dataId) return res.status(200).json({ ignorado: true });
   if (!mp.firmaValida(process.env.MP_WEBHOOK_SECRET, req.headers, dataId)) return res.status(401).json({ error: 'Firma inválida' });
-  if (ambito === null) return res.status(200).json({ ignorado: 'La cuenta de MercadoPago no está vinculada a ningún complejo' });
+  if (ambito === null) {
+    await auditar({ paymentId: dataId, ambito: null, httpStatus: 200, resultado: 'Cuenta de MercadoPago no vinculada' });
+    return res.status(200).json({ ignorado: 'La cuenta de MercadoPago no está vinculada a ningún complejo' });
+  }
   try {
-    res.status(200).json(await procesarPagoMercadoPago(ambito, String(dataId)));
+    const r = await procesarPagoMercadoPago(ambito, String(dataId));
+    await auditar({ paymentId: dataId, ambito, idVenta: r.tipo === 'venta' ? r.id : null, estado: r.estado, httpStatus: 200, resultado: r.ignorado || r.motivo || (r.estado ? `Procesado: ${r.estado}` : null) });
+    res.status(200).json(r);
   } catch (err) {
     // Pago inexistente en esa cuenta (ej. «Simular notificación» de MercadoPago): no tiene sentido reintentar
-    if (err.status === 404) return res.status(200).json({ ignorado: 'El pago no existe en la cuenta de MercadoPago' });
+    if (err.status === 404) {
+      await auditar({ paymentId: dataId, ambito, httpStatus: 200, resultado: 'El pago no existe en esa cuenta' });
+      return res.status(200).json({ ignorado: 'El pago no existe en la cuenta de MercadoPago' });
+    }
     console.error('[mercadopago] webhook', err.message);
+    await auditar({ paymentId: dataId, ambito, httpStatus: 500, resultado: `Error (MercadoPago reintenta): ${err.message}` });
     res.status(500).json({ error: 'No se pudo procesar la notificación' });
   }
 };
+
+/**
+ * Auditoría de cada notificación (mercadopago_notificaciones): qué llegó, cuándo y qué se hizo. Nunca rompe el
+ * webhook: si no se puede guardar el registro, sólo se informa por consola.
+ */
+const auditar = ({ paymentId, ambito, idVenta = null, estado = null, httpStatus, resultado = null }) =>
+  pool.query(
+    'INSERT INTO mercadopago_notificaciones (payment_id, ambito, id_venta, estado, resultado, http_status) VALUES (?, ?, ?, ?, ?, ?)',
+    [String(paymentId).slice(0, 40), ambito, idVenta, estado, resultado ? String(resultado).slice(0, 255) : null, httpStatus]
+  ).catch((e) => console.warn('[mercadopago] no se pudo auditar la notificación', e.message));
 
 /** URL única: identifica el complejo por la cuenta cobradora (user_id). */
 exports.webhook = asyncHandler(async (req, res) => {

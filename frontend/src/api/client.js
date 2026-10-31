@@ -144,6 +144,10 @@ export const adminApi = {
   evento: (id) => api.get(`/admin/event/${id}`).then(datos),
   // Control de ingresos por tipo de entrada (dashboard de Porteros, se consulta cada 10 s)
   ingresosEvento: (id) => api.get(`/admin/event/${id}/ingresos`).then(datos),
+  // Venta en portería: URLs de los QR de compra y cobro asistido en boletería
+  qrCompra: (id) => api.get(`/admin/event/${id}/qr-compra`).then(datos),
+  crearCobroPuerta: (d) => api.post('/admin/puerta/cobro', d).then(datos),
+  estadoCobroPuerta: (idVenta) => api.get(`/admin/puerta/cobro/${idVenta}`).then(datos),
   actualizarEvento: (id, d) => api.post(`/admin/event/${id}/update`, d).then(datos),
   // Venta directa con MercadoPago desde el panel: mismo checkout único que el resto de los canales
   cobrarMercadoPago: (d) => api.post('/ventas/checkout', d).then(datos),
@@ -173,6 +177,8 @@ export const linksPagoApi = {
 };
 
 export const publicoApi = {
+  // Landing de compra rápida (QR de la puerta); tipo = slug del tipo de entrada (/comprar/123/vip)
+  compraRapida: (idEvento, tipo) => api.get(`/publico/comprar/${idEvento}${tipo ? `/${tipo}` : ''}`, { headers: { 'X-Tenant': '' } }).then(datos),
   link: (codigo) => api.get(`/publico/links/${codigo}`, { headers: { 'X-Tenant': '' } }).then(datos),
   entradas: (token) => api.get(`/publico/entradas/${token}`, { headers: { 'X-Tenant': '' } }).then(datos),
   // Vuelta de MercadoPago de un link de vendedor (el comprador no tiene sesión)

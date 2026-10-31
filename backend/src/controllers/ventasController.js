@@ -74,7 +74,7 @@ const ejecutarVenta = async (compra, { empresa = null, marcarPagado = false, exp
         id_usuario: idTitular, id_vendedor: vendedor?.id_vendedor, id_link: vendedor?.id_link, id_evento: evento.id_evento,
         monto_total: total, estado: pagado ? 'pagado' : 'pendiente', metodo_pago: metodoPago, tipo_venta: tipoVenta,
         empresa, whatsapp_contacto: whatsapp, token_acceso: generarTokenAcceso(), expira_en: pagado ? null : expiraEn,
-        stock_descontado: !descontarAlAprobar,
+        stock_descontado: !descontarAlAprobar, origen: compra.origen || null,
       },
       conn
     );

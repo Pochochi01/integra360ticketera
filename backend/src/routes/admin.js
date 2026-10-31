@@ -2,6 +2,9 @@ const { Router } = require('express');
 const { staff } = require('../middlewares/tenant');
 const { estadisticasEvento } = require('../services/estadisticasEvento');
 const { ingresosEvento } = require('../services/ingresosEvento');
+const puerta = require('../services/ventaPuerta');
+const { validarCompra } = require('../middlewares/validarCompra');
+const { resolverComprador } = require('../controllers/linksPagoController');
 const { actualizarEvento, detalleAdmin } = require('../services/eventosAdmin');
 const { correosDeVentas, enviarEntradasPorCorreo } = require('../services/correo');
 const pool = require('../config/db');
@@ -88,5 +91,40 @@ r.post('/ventas/:id/reenviar-correo', admin, asyncHandler(async (req, res) => {
   res.json(await enviarEntradasPorCorreo(Number(req.params.id)));
 }));
 r.put('/event/:id/update', admin, actualizar);
+
+// ---------- Venta en portería (ver services/ventaPuerta.js) ----------
+
+/** GET /event/:id/qr-compra — URLs de compra (general y por tipo) para generar los QR de la puerta. */
+r.get('/event/:id/qr-compra', admin, asyncHandler(async (req, res) => res.json(await puerta.qrsDeCompra(req.params.id, req.tenant.id_tenant))));
+
+/**
+ * POST /puerta/cobro — boletería: { id_evento, id_tipo, cantidad, comprador?: { nombre, telefono, email? } }
+ * → 201 { id_venta, init_point, qr_pago (data URL), monto_total, expira_en }. No descuenta stock: lo hace el webhook.
+ */
+r.post('/puerta/cobro', admin,
+  (req, _res, next) => {
+    const cantidad = Number(req.body.cantidad || 1);
+    if (!Number.isInteger(cantidad) || cantidad < 1 || cantidad > 50) return next(new AppError(400, 'La cantidad debe ser un entero entre 1 y 50'));
+    if (!req.body.id_evento || !req.body.id_tipo) return next(new AppError(400, 'Elegí el evento y el tipo de entrada'));
+    req.body.items = [{ id_tipo: Number(req.body.id_tipo), cantidad }];
+    req.body.metodo_pago = 'mercadopago';
+    next();
+  },
+  // Con nombre y teléfono se identifica al comprador como siempre; sin datos, comprador anónimo de la puerta
+  asyncHandler(async (req, res, next) => {
+    const c = req.body.comprador || {};
+    if (c.nombre?.trim() && (c.telefono || c.whatsapp)) return resolverComprador(req, res, next);
+    req.body.comprador = null;
+    req.body.id_usuario_destino = await puerta.compradorAnonimo();
+    next();
+  }),
+  validarCompra('puerta'),
+  asyncHandler(async (req, res) => res.status(201).json(await puerta.crearCobroAsistido(req))));
+
+/** GET /puerta/cobro/:id — estado del cobro (la pantalla de boletería lo consulta cada 2 s). */
+r.get('/puerta/cobro/:id', admin, asyncHandler(async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json(await puerta.estadoCobro(req.params.id, req.tenant.id_tenant));
+}));
 
 module.exports = r;

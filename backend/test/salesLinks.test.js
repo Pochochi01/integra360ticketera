@@ -840,3 +840,119 @@ test('ingresos: sólo el admin del complejo', async () => {
   assert.equal((await api('GET', url, { token: datos[2].token })).status, 404);
 });
 
+// ── Venta en portería digital: QR de compra, cobro asistido, dashboard y auditoría del webhook ──────
+
+const { slugTipo } = require('../src/services/ventaPuerta');
+const ingresos = async () => (await api('GET', `/admin/event/${datos[1].id_evento}/ingresos`, { token: datos[1].token })).body;
+const ticketsDeVenta = async (idVenta) => (await pool.query('SELECT estado FROM tickets WHERE id_venta = ?', [idVenta]))[0];
+
+test('puerta: QR de compra general y por tipo; la landing devuelve el evento y el tipo pedido', async () => {
+  await asegurarStock(30);
+  const [[tipo]] = await pool.query('SELECT nombre_tipo FROM tipos_ticket WHERE id_tipo = ?', [datos[1].id_tipo]);
+  const slug = slugTipo(tipo.nombre_tipo);
+
+  const qrs = await api('GET', `/admin/event/${datos[1].id_evento}/qr-compra`, { token: datos[1].token });
+  assert.equal(qrs.status, 200);
+  assert.equal(qrs.body.general.url, `https://tu-dominio.com/comprar/evento/${datos[1].id_evento}`);
+  const delTipo = qrs.body.por_tipo.find((t) => t.id_tipo === datos[1].id_tipo);
+  assert.equal(delTipo.url, `https://tu-dominio.com/comprar/${datos[1].id_evento}/${slug}`);
+  assert.equal((await api('GET', `/admin/event/${datos[1].id_evento}/qr-compra`, { token: datos[2].token })).status, 404);
+
+  const general = await api('GET', `/publico/comprar/${datos[1].id_evento}`);
+  assert.equal(general.status, 200);
+  assert.ok(general.body.evento.nombre && general.body.complejo.nombre);
+  assert.ok(general.body.tipos.some((t) => t.id_tipo === datos[1].id_tipo));
+  assert.equal(general.body.mercadopago_disponible, true);
+  for (const t of general.body.tipos) assert.ok(t.quedan === null || t.quedan <= 20, 'el stock exacto sólo se muestra cuando quedan pocas');
+
+  const uno = await api('GET', `/publico/comprar/${datos[1].id_evento}/${slug}`);
+  assert.equal(uno.status, 200);
+  assert.deepEqual(uno.body.tipos.map((t) => t.id_tipo), [datos[1].id_tipo], 'sólo el tipo del QR');
+  assert.equal((await api('GET', `/publico/comprar/${datos[1].id_evento}/noexiste`)).status, 404);
+});
+
+test('puerta: compra por QR → stock y entrada al aprobarse; se marca como venta en puerta', async () => {
+  await asegurarStock(30);
+  const antes = await ingresos();
+  const stockAntes = await stockTipo(datos[1].id_tipo);
+  const r = await comprar({ event_id: datos[1].id_evento, items: items(2), origen: 'puerta_qr' });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  assert.match(ultimaPreferencia().opciones.backUrls.failure, /\/comprar\/evento\/\d+\?pago=rechazado$/, 'si rechaza, vuelve a la compra rápida');
+  const [[v]] = await pool.query('SELECT origen FROM ventas WHERE id_venta = ?', [r.body.id_venta]);
+  assert.equal(v.origen, 'puerta_qr');
+  assert.equal(await stockTipo(datos[1].id_tipo), stockAntes, 'sin pago no descuenta');
+
+  const enviados = correos.length;
+  await webhook(pagar(ultimaPreferencia()), datos[1].mpUser);
+  assert.equal(await stockTipo(datos[1].id_tipo), stockAntes - 2);
+  assert.ok((await ticketsDeVenta(r.body.id_venta)).every((t) => t.estado === 'valido'), 'entradas habilitadas para la Portería');
+  assert.equal(correos.length, enviados + 1, 'la entrada sale por los medios existentes');
+
+  const despues = await ingresos();
+  assert.equal(despues.puerta.por_origen.puerta_qr.tickets, antes.puerta.por_origen.puerta_qr.tickets + 2);
+  assert.equal(despues.puerta.por_origen.puerta_qr.monto, antes.puerta.por_origen.puerta_qr.monto + r.body.monto_total);
+
+  // Desde afuera no se puede marcar una venta como «asistida»
+  const falsa = await comprar({ event_id: datos[1].id_evento, items: items(1), origen: 'puerta_asistida' });
+  const [[f]] = await pool.query('SELECT origen FROM ventas WHERE id_venta = ?', [falsa.body.id_venta]);
+  assert.equal(f.origen, null);
+});
+
+test('puerta: cobro asistido en boletería → QR de pago, confirmación sin duplicados y auditoría del webhook', async () => {
+  await asegurarStock(30);
+  const antes = await ingresos();
+  const stockAntes = await stockTipo(datos[1].id_tipo);
+  const cuerpo = { id_evento: datos[1].id_evento, id_tipo: datos[1].id_tipo, cantidad: 3 };
+  assert.equal((await api('POST', '/admin/puerta/cobro', { token: await portero(), body: cuerpo })).status, 403, 'sólo el admin');
+
+  // Sin datos del cliente: comprador anónimo de la puerta
+  const r = await api('POST', '/admin/puerta/cobro', { token: datos[1].token, body: cuerpo });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  assert.match(r.body.qr_pago, /^data:image\/png;base64,/);
+  assert.ok(r.body.init_point);
+  assert.equal(cuentaDeToken.get(ultimaPreferencia().access_token), datos[1].mpUser, 'cobra en la cuenta del complejo');
+  const pref = ultimaPreferencia();
+
+  const pendiente = await api('GET', `/admin/puerta/cobro/${r.body.id_venta}`, { token: datos[1].token });
+  assert.equal(pendiente.body.estado_pago, 'pending');
+  assert.equal(pendiente.body.tickets, undefined);
+  assert.equal(await stockTipo(datos[1].id_tipo), stockAntes);
+  assert.equal((await api('GET', `/admin/puerta/cobro/${r.body.id_venta}`, { token: datos[2].token })).status, 404);
+
+  // MercadoPago aprueba y reenvía la notificación (reintento): una sola entrada por ticket, stock una vez
+  const pago = pagar(pref);
+  await webhook(pago, datos[1].mpUser);
+  await webhook(pago, datos[1].mpUser);
+  const aprobado = await api('GET', `/admin/puerta/cobro/${r.body.id_venta}`, { token: datos[1].token });
+  assert.equal(aprobado.body.estado_pago, 'approved');
+  assert.equal(aprobado.body.tickets.length, 3, 'entradas generadas, listas para escanear');
+  assert.ok(aprobado.body.entrada_url.includes('/entrada/'));
+  assert.equal((await ticketsDeVenta(r.body.id_venta)).length, 3, 'sin tickets duplicados');
+  assert.equal(await stockTipo(datos[1].id_tipo), stockAntes - 3, 'el stock baja una sola vez');
+
+  // Las entradas pasan por la Portería
+  const [[t1]] = await pool.query('SELECT codigo_qr FROM tickets WHERE id_venta = ? LIMIT 1', [r.body.id_venta]);
+  assert.equal((await api('POST', '/porteria/validarQR', { token: await portero(), body: { codigo: t1.codigo_qr } })).body.permitido, true);
+
+  const despues = await ingresos();
+  assert.equal(despues.puerta.por_origen.puerta_asistida.tickets, antes.puerta.por_origen.puerta_asistida.tickets + 3);
+  assert.equal(despues.puerta.tickets, antes.puerta.tickets + 3);
+  assert.equal(despues.ultimas_operaciones[0].id_venta, r.body.id_venta);
+  assert.equal(despues.ultimas_operaciones[0].origen, 'puerta_asistida');
+  assert.equal(despues.ultimas_operaciones[0].comprador, 'Cliente en puerta');
+  assert.ok(despues.generales.capacidad_disponible <= despues.generales.capacidad);
+  assert.ok(['libre', 'ajustada', 'critica'].includes(despues.generales.semaforo_capacidad));
+
+  // Auditoría: las dos notificaciones quedaron registradas, con la venta
+  const [log] = await pool.query('SELECT id_venta, estado, http_status FROM mercadopago_notificaciones WHERE payment_id = ? ORDER BY id', [pago]);
+  assert.equal(log.length, 2);
+  assert.ok(log.every((l) => l.id_venta === r.body.id_venta && l.http_status === 200 && l.estado === 'aprobado'));
+
+  // Con datos del cliente: queda identificado (y recibe la entrada por los medios existentes)
+  const conDatos = await api('POST', '/admin/puerta/cobro', { token: datos[1].token, body: { ...cuerpo, cantidad: 1, comprador: { nombre: 'Juan Pérez', telefono: '+54 9 11 6123 4567' } } });
+  assert.equal(conDatos.status, 201, JSON.stringify(conDatos.body));
+  const [[comp]] = await pool.query("SELECT CONCAT_WS(' ', u.nombre, u.apellido) AS n, v.whatsapp_contacto AS w FROM ventas v JOIN usuarios u USING (id_usuario) WHERE v.id_venta = ?", [conDatos.body.id_venta]);
+  assert.equal(comp.n, 'Juan Pérez');
+  assert.match(comp.w, /^\+54911/);
+});
+

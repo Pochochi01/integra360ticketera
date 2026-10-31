@@ -180,3 +180,94 @@ Es **una sola consulta** agrupada por tipo, sin N+1 ([ingresosEvento.js](backend
   - el filtro por tipo funciona;
   - se actualiza solo a los 10 s;
   - sin desbordes ni scroll horizontal.
+
+## Venta en portería digital (`/admin/porteros/venta`, migración 017)
+
+La venta en portería **no tiene un flujo de pago propio**. Usa el mismo núcleo que el resto de los canales:
+
+1. **Checkout único** `POST /api/ventas/checkout`: reserva sin descontar stock y crea la preferencia con el token OAuth del complejo.
+2. **Webhook**: valida firma, monto y cuenta cobradora.
+3. **`confirmarStockDeVenta`**: descuenta el stock y habilita los tickets.
+4. **Envío** de las entradas por correo y WhatsApp.
+5. **La Portería** escanea el QR y registra el ingreso.
+
+Lo único nuevo es de dónde sale la venta (`ventas.origen`), la landing rápida y la boletería asistida.
+
+### Flujo del cliente sin entrada
+
+1. Escanea el **QR de compra** de la puerta: `/comprar/evento/:id` (todos los tipos) o `/comprar/:id/:tipo` (un tipo ya elegido; el slug sale del nombre del tipo: «Early Bird» → `earlybird`).
+2. En la landing rápida elige la entrada y la cantidad, carga 3 datos (con autocompletado del navegador) y toca **Pagar con Mercado Pago**. El botón queda fijo abajo, al alcance del pulgar.
+3. MercadoPago aprueba:
+   - el webhook habilita la entrada;
+   - el cliente vuelve a `/entrada/:token` con su QR;
+   - le llega por correo y WhatsApp.
+4. El portero escanea el QR y el ingreso queda registrado.
+
+Si MercadoPago rechaza el pago, el cliente vuelve a la landing (`?pago=rechazado`) para reintentar.
+
+### Boletería asistida
+
+En la pestaña **Venta en puerta** el staff elige el tipo y la cantidad (y, opcionalmente, los datos del cliente) y toca **Generar cobro**:
+
+- se muestra el **QR de pago** de MercadoPago;
+- el cliente lo escanea y paga desde su celular;
+- la pantalla consulta el estado cada 2 s y, al aprobarse, muestra **Pago aprobado · Entrada generada · Lista para escanear**, con la imagen de cada entrada. Sin recargar.
+
+Sin datos del cliente se crea un comprador anónimo «Cliente en puerta» para esa venta: la entrada le aparece en el celular al volver de MercadoPago.
+
+### Pagos y webhooks
+
+- **Pago y ticket duplicados imposibles:**
+  - los tickets (con su QR único) se crean con la reserva, y el webhook sólo los habilita;
+  - la venta se bloquea con `FOR UPDATE` y sólo la primera aprobación actúa;
+  - `pagos.referencia_externa` es UNIQUE.
+- **Reintentos:** ante un error responde 500, y MercadoPago reintenta.
+- **Sin stock al aprobarse:** se reembolsa.
+- **Auditoría:** cada notificación queda en `mercadopago_notificaciones` (payment_id, complejo, venta, estado resultante, qué se hizo, código HTTP).
+
+### API nueva
+
+```http
+GET  /api/publico/comprar/:idEvento[/:tipo]     landing (evento, complejo, tipos con disponibilidad)
+POST /api/ventas/checkout { event_id, origen: 'puerta_qr', … }   (el checkout de siempre; desde afuera sólo se acepta 'puerta_qr')
+GET  /api/admin/event/:id/qr-compra             URLs de compra general y por tipo
+POST /api/admin/puerta/cobro                    { id_evento, id_tipo, cantidad, comprador? } → { id_venta, init_point, qr_pago, monto_total, expira_en }
+GET  /api/admin/puerta/cobro/:id                estado del cobro; aprobado → entradas con su link
+GET  /api/admin/event/:id/ingresos              ahora suma puerta { tickets, monto, por_origen }, ultimas_operaciones y capacidad_disponible / semaforo_capacidad
+```
+
+El cobro asistido vence a los 15 min (`PUERTA_COBRO_MIN`).
+
+### Panel del organizador
+
+- **QR de compra** general y uno por tipo, con **PNG**, **PDF** (cartel A4 de unos 23 KB, generado con jsPDF, que se carga sólo al pedirlo), **Copiar** y **Compartir**.
+- **Dashboard** (Control de ingresos), además de lo que ya mostraba:
+  - **control de capacidad:** capacidad, ingresados y disponibles, con semáforo: verde más del 50 % libre, amarillo 10–50 %, rojo 10 % o menos;
+  - **ventas en portería:** tickets y monto, separados en QR de compra y boletería;
+  - **últimas operaciones:** hora, comprador, tipo, medio de pago, origen y estado.
+
+### Tiempo real
+
+Consultas periódicas: 10 s en el dashboard y 2 s en un cobro pendiente. No hay WebSockets ni SSE. Así funciona igual con varias instancias de pm2 detrás de nginx, sin estado compartido ni configuración de proxy, y la confirmación del cobro llega en 1–2 s.
+
+### Pruebas (3 nuevas, 27 en total)
+
+- **QR y landing:** URLs general y por tipo; la landing devuelve sólo el tipo del QR; un slug inexistente → 404; el stock exacto sólo se muestra cuando quedan pocas.
+- **Compra por QR:**
+  - queda marcada `puerta_qr`;
+  - no descuenta stock hasta el webhook; al aprobarse descuenta, habilita los tickets y envía el correo;
+  - suma en «ventas en portería»;
+  - desde afuera no se puede marcar como `puerta_asistida`.
+- **Boletería:**
+  - el portero recibe 403;
+  - devuelve el QR de pago y cobra en la cuenta del complejo;
+  - pendiente → aprobado, con la notificación repetida: una sola vez el stock y sin tickets duplicados;
+  - la Portería valida la entrada;
+  - aparece en el dashboard y en las últimas operaciones;
+  - las dos notificaciones quedan auditadas;
+  - con datos, el cliente queda identificado.
+- **Navegador** (Edge, 360 y 1280 px, MercadoPago simulado):
+  - descargas de PNG y PDF;
+  - el cobro aprobado aparece en pantalla en 1,4 s sin recargar;
+  - la landing funciona y el dashboard se actualiza;
+  - sin desbordes.
