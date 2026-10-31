@@ -142,6 +142,8 @@ export const adminApi = {
   estadisticasEvento: (id) => api.get(`/admin/event/${id}/stats`).then(datos),
   // Evento con stock total y auditoría; update edita datos y SUMA entradas ({ agregar_stock: [{ id_tipo, cantidad }] })
   evento: (id) => api.get(`/admin/event/${id}`).then(datos),
+  // Control de ingresos por tipo de entrada (dashboard de Porteros, se consulta cada 10 s)
+  ingresosEvento: (id) => api.get(`/admin/event/${id}/ingresos`).then(datos),
   actualizarEvento: (id, d) => api.post(`/admin/event/${id}/update`, d).then(datos),
   // Venta directa con MercadoPago desde el panel: mismo checkout único que el resto de los canales
   cobrarMercadoPago: (d) => api.post('/ventas/checkout', d).then(datos),

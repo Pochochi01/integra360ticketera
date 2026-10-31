@@ -114,3 +114,69 @@ Hay que servir el frontend por HTTPS con un certificado válido, por ejemplo con
 
 - `service-worker.js` tiene que servirse desde la raíz (`/service-worker.js`) y con `Cache-Control: no-cache`, para que los navegadores detecten las versiones nuevas.
 - Ante un cambio de estrategia de caché, subí `VERSION` dentro del SW.
+
+## Control de ingresos (`/admin/porteros` → pestaña «Control de ingresos»)
+
+Panel en tiempo real para el organizador: por cada tipo de entrada, cuántas se vendieron, cuántas ingresaron y cuánto dinero representan. Se actualiza solo cada 10 s mientras la pestaña está visible, y al volver a ella.
+
+### De dónde salen los números
+
+No hay tablas nuevas: todo sale de lo que la Portería ya registra.
+
+| Dato | Origen |
+|---|---|
+| Vendida | ticket vigente de una venta pagada (`tickets.estado` = `valido` o `usado`) |
+| Ingresada | ticket `usado`: la Portería lo validó (`fecha_uso`) |
+| Pendiente | ticket `valido`: todavía no entró |
+| Monto | lo que realmente se cobró: el monto de la venta prorrateado entre sus tickets (respeta precios promocionales de links y cortesías en $0) |
+| Capacidad | `tipos_ticket.stock_total` |
+| Semáforo | uso ≥ 70 % verde · 40–69 % amarillo · < 40 % rojo · sin ventas, neutro |
+
+Los tickets en efectivo todavía no validados no cuentan como vendidos.
+
+### API
+
+```http
+GET /api/admin/event/:id/ingresos     (admin del complejo; otro complejo → 404, portero → 403)
+→ { evento, generales: { vendidas, ingresadas, pendientes, facturado, consumido, pendiente_monto,
+                         porcentaje_ingreso, semaforo, capacidad, capacidad_utilizada, ultimo_ingreso },
+    por_tipo: [{ id_tipo, nombre, vendidas, ingresadas, pendientes, uso, semaforo,
+                 monto_vendido, monto_consumido, monto_pendiente, capacidad, ultimo_ingreso }],
+    actualizado_en }
+```
+
+Es **una sola consulta** agrupada por tipo, sin N+1 ([ingresosEvento.js](backend/src/services/ingresosEvento.js)). El prorrateo se calcula en una tabla derivada por venta, unida con un JOIN anidado para que un tipo sin ventas nunca sume montos de otros tipos.
+
+### Pantalla
+
+- **Filtros:**
+  - **Evento:** por defecto, el próximo o en curso;
+  - **Fecha** y **Estado:** acotan la lista de eventos;
+  - **Tipo de ticket:** filtra tarjetas y gráficos, y recalcula los KPIs.
+- **KPIs:**
+  - ingreso general con semáforo y barra;
+  - vendidas, ingresadas y pendientes;
+  - capacidad utilizada;
+  - facturado, consumido y pendiente;
+  - % general.
+- **Gráficos:**
+  - donut con la distribución de vendidas por tipo (leyenda con valores);
+  - barras horizontales de ingresadas por tipo;
+  - barras apiladas de vendidas contra ingresadas;
+  - ranking de los más consumidos.
+- **Detalle por tipo:** tarjetas apilables, de 1, 2 o 3 columnas según el ancho.
+- **Colores:** validados con la skill `dataviz` (`validate_palette.js`), con pasos propios en claro y oscuro. El color sigue al tipo, no a su posición, así que un filtro no repinta. Verde, amarillo y rojo quedan sólo para el semáforo, siempre con ícono y texto. A partir del séptimo tipo, los demás se agrupan como «Otros».
+- **Piezas compartidas** con las estadísticas de `/admin/ventas`, en [estadisticas/comun.jsx](frontend/src/components/admin/estadisticas/comun.jsx): consulta en vivo, indicador «Actualizado hace…», tarjetas KPI y estilo de gráficos.
+
+### Pruebas (2 nuevas, 24 en total)
+
+- **Datos en vivo:**
+  - compra de 4 entradas; la Portería real valida 3 QR y un QR repetido no suma;
+  - vendidas, ingresadas, pendientes, uso, semáforo y montos se comparan con un cálculo independiente sobre la vista `tickets_detalle`, para cada tipo y en el total;
+  - un tipo sin ventas queda en $0.
+- **Acceso:** sin sesión → 401, portero → 403, otro complejo → 404.
+- **Navegador** (Edge, 360 / 820 / 1280 px y modo oscuro):
+  - 8 KPIs, 3 gráficos, ranking y tarjetas por tipo;
+  - el filtro por tipo funciona;
+  - se actualiza solo a los 10 s;
+  - sin desbordes ni scroll horizontal.

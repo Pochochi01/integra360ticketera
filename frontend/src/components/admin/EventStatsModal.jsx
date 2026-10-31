@@ -1,16 +1,17 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import { Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { ArrowsClockwise, CurrencyCircleDollar, Hourglass, Percent, Ticket } from '@phosphor-icons/react';
-import { adminApi, mensajeError } from '../../api/client';
+import { CurrencyCircleDollar, Hourglass, Percent, Ticket } from '@phosphor-icons/react';
+import { adminApi } from '../../api/client';
 import { Alerta, Modal, Skeleton } from '../ui';
 import { importe } from '../../utils/format';
+import { Actualizado, compacto, ejes, Kpi, REFRESCO_MS, Tarjeta, tooltipProps, useConsultaEnVivo } from './estadisticas/comun';
 
-export const REFRESCO_MS = 10_000;
+// Reexportados: /admin/ventas los importa desde acá
+export { Actualizado, REFRESCO_MS };
 
 // Paleta categórica (legible en claro y oscuro); el primer color es el de la marca
 const COLORES = ['#4f46e5', '#0891b2', '#f59e0b', '#10b981', '#e11d48', '#8b5cf6', '#64748b'];
 const METODOS = { mercadopago: 'MercadoPago', efectivo: 'Efectivo', transferencia: 'Transferencia', cortesia: 'Cortesía', tarjeta: 'Tarjeta', billetera: 'Billetera' };
-const compacto = new Intl.NumberFormat('es-AR', { notation: 'compact', maximumFractionDigits: 1 });
 const unidades = (n) => `${n} entrada${n === 1 ? '' : 's'}`;
 
 /**
@@ -18,79 +19,9 @@ const unidades = (n) => `${n} entrada${n === 1 ? '' : 's'}`;
  * está visible (y al volver a ella). Así se ven al instante los pagos que MercadoPago confirma por webhook.
  */
 export function useEstadisticasEvento(idEvento) {
-  const [stats, setStats] = useState(null);
-  const [error, setError] = useState('');
-  const [cargando, setCargando] = useState(false);
-  const pedido = useRef(0);
-
-  const actualizar = useCallback(async () => {
-    if (!idEvento) return;
-    const n = ++pedido.current;
-    setCargando(true);
-    try {
-      const d = await adminApi.estadisticasEvento(idEvento);
-      if (n === pedido.current) { setStats(d); setError(''); } // descarta respuestas de un evento anterior
-    } catch (e) {
-      if (n === pedido.current) setError(mensajeError(e));
-    } finally {
-      if (n === pedido.current) setCargando(false);
-    }
-  }, [idEvento]);
-
-  useEffect(() => {
-    setStats(null);
-    if (!idEvento) return undefined;
-    actualizar();
-    const id = setInterval(() => { if (document.visibilityState === 'visible') actualizar(); }, REFRESCO_MS);
-    const alVolver = () => document.visibilityState === 'visible' && actualizar();
-    document.addEventListener('visibilitychange', alVolver);
-    return () => { clearInterval(id); document.removeEventListener('visibilitychange', alVolver); };
-  }, [idEvento, actualizar]);
-
-  return { stats, error, cargando, actualizar };
+  const { datos, ...resto } = useConsultaEnVivo(idEvento ? () => adminApi.estadisticasEvento(idEvento) : null, idEvento);
+  return { stats: datos, ...resto };
 }
-
-/** «hace 4 s»: se recalcula cada segundo para que el admin vea que los datos están vivos. */
-export function Actualizado({ en, cargando, onActualizar }) {
-  const [, tic] = useState(0);
-  useEffect(() => { const id = setInterval(() => tic((x) => x + 1), 1000); return () => clearInterval(id); }, []);
-  const seg = en ? Math.max(0, Math.round((Date.now() - new Date(en).getTime()) / 1000)) : null;
-  return (
-    <button type="button" onClick={onActualizar} className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs text-zinc-500 ring-1 ring-zinc-900/10 transition-colors hover:bg-zinc-50 dark:text-zinc-400 dark:ring-white/10 dark:hover:bg-white/5"
-      aria-label="Actualizar ahora" title={`Se actualiza solo cada ${REFRESCO_MS / 1000} s`}>
-      <span className={`h-1.5 w-1.5 rounded-full ${cargando ? 'bg-amber-500' : 'bg-emerald-500'}`} aria-hidden />
-      <ArrowsClockwise size={12} weight="bold" className={cargando ? 'animate-spin motion-reduce:animate-none' : ''} aria-hidden />
-      {seg === null ? 'Cargando…' : seg < 2 ? 'Actualizado ahora' : `Actualizado hace ${seg} s`}
-    </button>
-  );
-}
-
-const Kpi = ({ icono: Icono, titulo, valor, detalle, tono = 'indigo' }) => (
-  <div className="rounded-2xl p-4 ring-1 ring-zinc-900/5 dark:ring-white/10">
-    <p className="flex items-center gap-1.5 text-xs font-medium text-zinc-500 dark:text-zinc-400">
-      <Icono size={16} weight="duotone" className={{ indigo: 'text-indigo-600 dark:text-indigo-400', emerald: 'text-emerald-600 dark:text-emerald-400', amber: 'text-amber-600 dark:text-amber-400', sky: 'text-sky-600 dark:text-sky-400' }[tono]} aria-hidden />
-      {titulo}
-    </p>
-    <p className="mt-1 text-2xl font-semibold tabular-nums tracking-tight">{valor}</p>
-    {detalle && <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">{detalle}</p>}
-  </div>
-);
-
-const Tarjeta = ({ titulo, children, accion }) => (
-  <section className="min-w-0 rounded-2xl p-4 ring-1 ring-zinc-900/5 dark:ring-white/10">
-    <div className="mb-3 flex items-center justify-between gap-2">
-      <h4 className="text-sm font-semibold">{titulo}</h4>
-      {accion}
-    </div>
-    {children}
-  </section>
-);
-
-const tooltipProps = {
-  contentStyle: { borderRadius: 12, border: 'none', boxShadow: '0 8px 24px rgb(0 0 0 / 0.15)', fontSize: 12 },
-  cursor: { fill: 'rgb(99 102 241 / 0.08)' },
-};
-const ejes = { tick: { fontSize: 11, fill: 'currentColor' }, tickLine: false, axisLine: false };
 
 /** Selector Pesos / Unidades para los gráficos. */
 const Medida = ({ valor, onChange }) => (

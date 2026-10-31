@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { Check, Copy, DoorOpen, Key, ShieldCheck, Trash, UserPlus } from '@phosphor-icons/react';
 import { accesoApi, mensajeError, porterosApi } from '../../api/client';
-import { Alerta, Badge, Modal, Spinner, Vacio, useConfirmar } from '../../components/ui';
+import { Alerta, Badge, Modal, Spinner, Tabs, Vacio, useConfirmar } from '../../components/ui';
+import ControlIngresos from '../../components/admin/estadisticas/ControlIngresos';
 import { fecha } from '../../utils/format';
 
 /** Copia un valor y confirma con un check durante un instante. */
@@ -42,6 +43,8 @@ export default function AdminPorteros() {
   const [credenciales, setCredenciales] = useState(null); // { titulo, usuario, password }
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState('');
+  // Control de ingresos primero: es lo que se mira durante el evento
+  const [tab, setTab] = useState('ingresos');
 
   const cargar = () => Promise.all([
     porterosApi.listar().then(setPorteros),
@@ -90,16 +93,24 @@ export default function AdminPorteros() {
         <div>
           <h1 className="text-3xl font-semibold tracking-tight">Porteros</h1>
           <p className="mt-1 text-zinc-500 dark:text-zinc-400">
-            Usuarios de la puerta: sólo pueden entrar a la Portería y escanear entradas. {activos} activo{activos === 1 ? '' : 's'}.
+            {tab === 'ingresos'
+              ? 'Ingresos al evento en tiempo real, por tipo de entrada.'
+              : <>Usuarios de la puerta: sólo pueden entrar a la Portería y escanear entradas. {activos} activo{activos === 1 ? '' : 's'}.</>}
           </p>
         </div>
-        <button className="btn-primary" onClick={() => setNuevo({ nombre: '', apellido: '' })}>
-          <UserPlus size={18} weight="bold" aria-hidden /> Nuevo portero
-        </button>
+        {tab === 'equipo' && (
+          <button className="btn-primary" onClick={() => setNuevo({ nombre: '', apellido: '' })}>
+            <UserPlus size={18} weight="bold" aria-hidden /> Nuevo portero
+          </button>
+        )}
       </div>
       <Alerta onClose={() => setError('')}>{error}</Alerta>
 
-      <div className="grid gap-8 lg:grid-cols-5">
+      <Tabs tabs={[['ingresos', 'Control de ingresos'], ['equipo', `Porteros (${porteros.length})`]]} activa={tab} onChange={setTab} />
+
+      {tab === 'ingresos' && <ControlIngresos />}
+
+      {tab === 'equipo' && <div className="grid gap-8 lg:grid-cols-5">
         <section className="min-w-0 lg:col-span-3">
           {porteros.length === 0 ? (
             <Vacio icono={DoorOpen} titulo="Todavía no hay porteros"
@@ -166,7 +177,7 @@ export default function AdminPorteros() {
             </ul>
           )}
         </section>
-      </div>
+      </div>}
 
       {nuevo && (
         <Modal titulo="Nuevo portero" onClose={() => setNuevo(null)}>

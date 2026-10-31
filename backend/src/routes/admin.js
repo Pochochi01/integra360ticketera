@@ -1,6 +1,7 @@
 const { Router } = require('express');
 const { staff } = require('../middlewares/tenant');
 const { estadisticasEvento } = require('../services/estadisticasEvento');
+const { ingresosEvento } = require('../services/ingresosEvento');
 const { actualizarEvento, detalleAdmin } = require('../services/eventosAdmin');
 const { correosDeVentas, enviarEntradasPorCorreo } = require('../services/correo');
 const pool = require('../config/db');
@@ -24,6 +25,12 @@ const admin = staff('admin');
 r.get('/event/:id/stats', admin, asyncHandler(async (req, res) => {
   res.set('Cache-Control', 'no-store');
   res.json(await estadisticasEvento(Number(req.params.id), req.tenant.id_tenant));
+}));
+
+/** GET /event/:id/ingresos — control de ingresos por tipo de entrada (dashboard de Porteros, se consulta cada 10 s). */
+r.get('/event/:id/ingresos', admin, asyncHandler(async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json(await ingresosEvento(Number(req.params.id), req.tenant.id_tenant));
 }));
 
 r.get('/event/:id', admin, asyncHandler(async (req, res) => {

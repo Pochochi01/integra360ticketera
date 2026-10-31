@@ -765,3 +765,78 @@ test('admin: GET /api/admin/ventas/links/:ventaId — un link válido por ticket
   assert.equal((await api('GET', url(pendiente.body.id_venta), { token: datos[1].token })).status, 409, 'venta no pagada');
 });
 
+// ── Control de ingresos por tipo de entrada (dashboard de Porteros) ─────────────────────────────────
+
+/** JWT de un portero activo del complejo 1 (del seed): valida QR por la Portería real. */
+const portero = async () => {
+  const [[p]] = await pool.query("SELECT id_usuario FROM porteros WHERE id_tenant = 1 AND estado = 'activo' ORDER BY id_portero LIMIT 1");
+  assert.ok(p, 'el seed debe tener un portero activo en el complejo 1');
+  return jwt.sign({ id_usuario: p.id_usuario, rol: 'portero', id_tenant: 1 }, process.env.JWT_SECRET, { expiresIn: '1h' });
+};
+/** Cálculo independiente desde la vista tickets_detalle (monto prorrateado por ticket). */
+const ingresosEsperados = async (idEvento) => {
+  const [filas] = await pool.query(
+    `SELECT t.id_tipo, td.estado_ticket, td.monto FROM tickets_detalle td JOIN tickets t ON t.id_ticket = td.id
+      WHERE td.event_id = ? AND td.estado = 'approved' AND td.estado_ticket IN ('valido','usado')`, [idEvento]);
+  const porTipo = {};
+  for (const f of filas) {
+    const x = (porTipo[f.id_tipo] ??= { vendidas: 0, ingresadas: 0, monto_vendido: 0, monto_consumido: 0 });
+    x.vendidas++;
+    x.monto_vendido += Number(f.monto);
+    if (f.estado_ticket === 'usado') { x.ingresadas++; x.monto_consumido += Number(f.monto); }
+  }
+  return porTipo;
+};
+
+test('ingresos: por tipo de entrada, en vivo con la Portería, coincide con la base', async () => {
+  const url = `/admin/event/${datos[1].id_evento}/ingresos`;
+  const antes = (await api('GET', url, { token: datos[1].token })).body;
+  const tipoAntes = antes.por_tipo.find((t) => t.id_tipo === datos[1].id_tipo);
+
+  // Compra de 4 entradas; la Portería valida 3
+  const venta = await compraAprobada(4);
+  const [tickets] = await pool.query('SELECT codigo_qr FROM tickets WHERE id_venta = ? ORDER BY id_ticket', [venta.id_venta]);
+  const tokenPortero = await portero();
+  for (const { codigo_qr: codigo } of tickets.slice(0, 3)) {
+    const r = await api('POST', '/porteria/validarQR', { token: tokenPortero, body: { codigo, id_evento: datos[1].id_evento } });
+    assert.equal(r.body.permitido, true, JSON.stringify(r.body));
+  }
+  // Un QR repetido no suma otro ingreso
+  assert.equal((await api('POST', '/porteria/validarQR', { token: tokenPortero, body: { codigo: tickets[0].codigo_qr } })).body.permitido, false);
+
+  const r = await api('GET', url, { token: datos[1].token });
+  assert.equal(r.status, 200);
+  const tipo = r.body.por_tipo.find((t) => t.id_tipo === datos[1].id_tipo);
+  assert.equal(tipo.vendidas, tipoAntes.vendidas + 4);
+  assert.equal(tipo.ingresadas, tipoAntes.ingresadas + 3);
+  assert.equal(tipo.pendientes, tipo.vendidas - tipo.ingresadas);
+  assert.equal(tipo.uso, Math.round((tipo.ingresadas / tipo.vendidas) * 1000) / 10);
+  assert.equal(tipo.semaforo, tipo.uso >= 70 ? 'alto' : tipo.uso >= 40 ? 'medio' : 'bajo');
+  assert.ok(Math.abs(tipo.monto_pendiente - (tipo.monto_vendido - tipo.monto_consumido)) < 0.01);
+  assert.ok(r.body.generales.ultimo_ingreso, 'registra la hora del último ingreso');
+
+  // Contra el cálculo independiente: cada tipo y los totales
+  const esperado = await ingresosEsperados(datos[1].id_evento);
+  for (const t of r.body.por_tipo) {
+    const e = esperado[t.id_tipo] || { vendidas: 0, ingresadas: 0, monto_vendido: 0, monto_consumido: 0 };
+    assert.equal(t.vendidas, e.vendidas, `${t.nombre} vendidas`);
+    assert.equal(t.ingresadas, e.ingresadas, `${t.nombre} ingresadas`);
+    assert.ok(Math.abs(t.monto_vendido - e.monto_vendido) < 0.05, `${t.nombre} monto vendido`);
+    assert.ok(Math.abs(t.monto_consumido - e.monto_consumido) < 0.05, `${t.nombre} monto consumido`);
+  }
+  const g = r.body.generales;
+  assert.equal(g.vendidas, r.body.por_tipo.reduce((s, t) => s + t.vendidas, 0));
+  assert.equal(g.ingresadas, r.body.por_tipo.reduce((s, t) => s + t.ingresadas, 0));
+  assert.equal(g.capacidad, r.body.por_tipo.reduce((s, t) => s + t.capacidad, 0));
+  assert.equal(g.porcentaje_ingreso, Math.round((g.ingresadas / g.vendidas) * 1000) / 10);
+  // Un tipo sin ventas no suma montos de otros tipos
+  for (const t of r.body.por_tipo.filter((x) => x.vendidas === 0)) assert.equal(t.monto_vendido, 0, t.nombre);
+});
+
+test('ingresos: sólo el admin del complejo', async () => {
+  const url = `/admin/event/${datos[1].id_evento}/ingresos`;
+  assert.equal((await api('GET', url)).status, 401);
+  assert.equal((await api('GET', url, { token: await portero() })).status, 403);
+  assert.equal((await api('GET', url, { token: datos[2].token })).status, 404);
+});
+
