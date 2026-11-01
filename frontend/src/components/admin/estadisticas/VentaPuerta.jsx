@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import QRCode from 'qrcode';
-import { CheckCircle, Copy, DownloadSimple, FilePdf, Minus, Plus, QrCode, ShareNetwork, Wallet, XCircle } from '@phosphor-icons/react';
+import { CheckCircle, Copy, DownloadSimple, FilePdf, Minus, Money, Plus, QrCode, ShareNetwork, Wallet, XCircle } from '@phosphor-icons/react';
 import { adminApi, eventosApi, mensajeError } from '../../../api/client';
 import WhatsappInput from '../../WhatsappInput';
 import { Alerta, Skeleton, Vacio } from '../../ui';
@@ -11,11 +11,16 @@ import { eventoPorDefecto } from './ControlIngresos';
  * Venta en portería (/admin/porteros/venta):
  *  1. QR de compra del evento (general y uno por tipo) para imprimir en la puerta: PNG, PDF (cartel A4),
  *     copiar y compartir. El cliente lo escanea, compra en /comprar/... y paga con MercadoPago.
- *  2. Cobro asistido en boletería: el staff elige tipo y cantidad, genera el cobro y muestra el QR de pago; el
- *     cliente paga desde su celular y esta pantalla confirma sola (consulta el estado cada 2 s).
+ *  2. Cobro asistido en boletería: el staff elige tipo, cantidad y método de pago.
+ *     · Mercado Pago QR: genera el cobro y muestra el QR; el cliente paga desde su celular y esta pantalla
+ *       confirma sola (consulta el estado cada 2 s).
+ *     · Efectivo: registra la venta al instante (sin Mercado Pago) y muestra las entradas habilitadas.
+ *     Cada operación lleva una clave única: un doble click o un reintento no registra dos ventas.
  * Los QR se generan en el navegador (librería qrcode, ya instalada); jsPDF se carga sólo al pedir el PDF.
  */
 const SONDEO_MS = 2000;
+/** Clave de idempotencia de una operación (una por venta: se renueva al empezar otra). */
+const nuevaClave = () => (crypto.randomUUID ? crypto.randomUUID() : `${Date.now().toString(16).padStart(8, '0').slice(-8)}-0000-4000-8000-${Math.random().toString(16).slice(2, 14).padEnd(12, '0')}`);
 
 const archivoDe = (texto) => String(texto).normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-zA-Z0-9]+/g, '-').toLowerCase();
 
@@ -76,9 +81,12 @@ function TarjetaQr({ titulo, subtitulo, url, evento, tipo, grande = false }) {
 }
 
 /** Cobro asistido: formulario → QR de pago (esperando) → aprobado con las entradas. */
-function CobroAsistido({ evento, tipos }) {
+function CobroAsistido({ evento, tipos, mercadopago }) {
   const vendibles = tipos;
-  const [form, setForm] = useState({ id_tipo: vendibles[0]?.id_tipo || '', cantidad: 1, nombre: '', telefono: '' });
+  const [form, setForm] = useState({ id_tipo: vendibles[0]?.id_tipo || '', cantidad: 1, nombre: '', telefono: '', observaciones: '' });
+  // Sin Mercado Pago conectado, la boletería cobra en efectivo
+  const [metodo, setMetodo] = useState(mercadopago ? 'mercadopago' : 'efectivo');
+  const [clave, setClave] = useState(nuevaClave);
   const [conDatos, setConDatos] = useState(false);
   const [telefonoOk, setTelefonoOk] = useState(null);
   const [cobro, setCobro] = useState(null); // respuesta de crear
@@ -91,7 +99,7 @@ function CobroAsistido({ evento, tipos }) {
 
   // Consulta el estado cada 2 s mientras el cobro está pendiente (se corta al aprobarse o al cerrar)
   useEffect(() => {
-    if (!cobro) return undefined;
+    if (!cobro || cobro.metodo_pago !== 'mercadopago') return undefined; // el efectivo ya vuelve aprobado
     let vivo = true;
     const consultar = async () => {
       try {
@@ -118,31 +126,39 @@ function CobroAsistido({ evento, tipos }) {
     setError('');
     try {
       setEstado(null);
-      setCobro(await adminApi.crearCobroPuerta({
-        id_evento: evento.id_evento, id_tipo: tipo.id_tipo, cantidad: form.cantidad,
+      const r = await adminApi.crearCobroPuerta({
+        id_evento: evento.id_evento, id_tipo: tipo.id_tipo, cantidad: form.cantidad, metodo_pago: metodo, clave,
+        observaciones: form.observaciones.trim() || undefined,
         comprador: conDatos ? { nombre: form.nombre.trim(), telefono: form.telefono } : undefined,
-      }));
+      });
+      setCobro(r);
+      if (r.metodo_pago === 'efectivo') setEstado(r); // venta registrada: va directo a la confirmación
     } catch (err) {
       setError(mensajeError(err));
     } finally {
       setEnviando(false);
     }
   };
-  const nuevo = () => { setCobro(null); setEstado(null); setForm((f) => ({ ...f, cantidad: 1, nombre: '', telefono: '' })); setConDatos(false); };
+  const nuevo = () => { setCobro(null); setEstado(null); setClave(nuevaClave()); setForm((f) => ({ ...f, cantidad: 1, nombre: '', telefono: '', observaciones: '' })); setConDatos(false); };
 
   if (!vendibles.length) return <Alerta tipo="info">Este evento no tiene entradas a la venta.</Alerta>;
 
   // 3) Aprobado: entradas generadas, listas para escanear
   if (estado?.estado_pago === 'approved') {
+    const efectivo = estado.metodo_pago === 'efectivo';
+    const plural = estado.tickets.length === 1 ? '' : 's';
     return (
       <div className="space-y-4" data-testid="cobro-aprobado" role="status">
         <div className="rounded-2xl bg-emerald-50 p-5 ring-1 ring-emerald-600/20 dark:bg-emerald-500/10 dark:ring-emerald-400/20">
           <ul className="space-y-1.5 text-lg font-semibold text-emerald-800 dark:text-emerald-200">
-            {['Pago aprobado', `Entrada${estado.tickets.length === 1 ? '' : 's'} generada${estado.tickets.length === 1 ? '' : 's'}`, 'Lista para escanear'].map((t) => (
-              <li key={t} className="flex items-center gap-2"><CheckCircle size={24} weight="fill" aria-hidden /> {t}</li>
+            {[efectivo ? 'Venta registrada en efectivo correctamente' : 'Pago aprobado', `Entrada${plural} generada${plural}`, 'Lista para escanear'].map((t) => (
+              <li key={t} className="flex items-center gap-2"><CheckCircle size={24} weight="fill" className="shrink-0" aria-hidden /> {t}</li>
             ))}
           </ul>
-          <p className="mt-2 text-sm text-emerald-800/80 dark:text-emerald-200/80">{importe(estado.monto_total)} · {estado.comprador}. La entrada también le apareció al cliente en su celular.</p>
+          <p className="mt-2 text-sm text-emerald-800/80 dark:text-emerald-200/80">
+            {importe(estado.monto_total)} · {efectivo ? 'efectivo' : 'Mercado Pago'} · {estado.comprador}.{' '}
+            {efectivo ? 'El portero puede escanear el QR desde esta pantalla.' : 'La entrada también le apareció al cliente en su celular.'}
+          </p>
         </div>
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
           {estado.tickets.map((t) => (
@@ -210,6 +226,20 @@ function CobroAsistido({ evento, tipos }) {
             className="grid h-11 w-11 place-items-center rounded-full bg-indigo-600 text-white active:scale-[0.92]"><Plus size={18} weight="bold" aria-hidden /></button>
         </span>
       </div>
+      {/* Método de pago */}
+      <fieldset className="grid grid-cols-2 gap-2" data-testid="metodo-pago">
+        <legend className="label">Método de pago</legend>
+        {[['mercadopago', 'Mercado Pago QR', QrCode, 'El cliente paga desde su celular'], ['efectivo', 'Efectivo', Money, 'Cobrás en mano y entra al instante']].map(([valor, texto, Icono, ayuda]) => {
+          const deshabilitado = valor === 'mercadopago' && !mercadopago;
+          return (
+            <label key={valor} className={`flex min-h-16 flex-col justify-center gap-0.5 rounded-xl px-3 py-2 ring-1 transition-[box-shadow,background-color] duration-150 ${deshabilitado ? 'cursor-not-allowed opacity-50 ring-zinc-900/10 dark:ring-white/10' : metodo === valor ? 'cursor-pointer bg-indigo-50 ring-2 ring-indigo-500 dark:bg-indigo-500/10' : 'cursor-pointer ring-zinc-900/10 dark:ring-white/10'}`}>
+              <input type="radio" name="metodo-pago" className="sr-only" value={valor} checked={metodo === valor} disabled={deshabilitado} onChange={() => setMetodo(valor)} />
+              <span className="flex items-center gap-1.5 font-semibold"><Icono size={18} weight="duotone" aria-hidden /> {texto}</span>
+              <span className="text-xs text-zinc-500 dark:text-zinc-400">{deshabilitado ? 'Mercado Pago no está conectado' : ayuda}</span>
+            </label>
+          );
+        })}
+      </fieldset>
       <label className="flex items-center gap-2 text-sm">
         <input type="checkbox" checked={conDatos} onChange={(e) => setConDatos(e.target.checked)} /> Cargar datos del cliente (opcional: recibe la entrada por WhatsApp y correo)
       </label>
@@ -222,12 +252,18 @@ function CobroAsistido({ evento, tipos }) {
           <WhatsappInput label="WhatsApp" value={form.telefono} onChange={(telefono) => setForm({ ...form, telefono })} onValidez={setTelefonoOk} />
         </div>
       )}
+      <div>
+        <label className="label" htmlFor="cobro-observaciones">Observaciones (opcional)</label>
+        <input id="cobro-observaciones" className="input" maxLength={255} placeholder="Ej. pagó con billete de 20.000" value={form.observaciones} onChange={(e) => setForm({ ...form, observaciones: e.target.value })} />
+      </div>
       <div className="flex items-baseline justify-between border-t border-zinc-100 pt-3 dark:border-white/10">
-        <span className="font-medium">Total</span>
+        <span className="font-medium">Total{metodo === 'efectivo' ? ' a cobrar' : ''}</span>
         <span className="text-3xl font-semibold tabular-nums tracking-tight">{importe(total)}</span>
       </div>
-      <button className="btn-primary w-full py-3! text-base!" disabled={!tipo || !datosOk || enviando} data-testid="generar-cobro">
-        <Wallet size={20} weight="bold" aria-hidden /> {enviando ? 'Generando…' : 'Generar cobro'}
+      {/* Deshabilitado mientras se envía + clave de operación en el servidor: nunca dos ventas por un doble click */}
+      <button className={`btn-primary w-full py-3! text-base! ${metodo === 'efectivo' ? 'bg-emerald-600! hover:bg-emerald-500!' : ''}`} disabled={!tipo || !datosOk || enviando} data-testid="generar-cobro">
+        {metodo === 'efectivo' ? <Money size={20} weight="bold" aria-hidden /> : <Wallet size={20} weight="bold" aria-hidden />}
+        {enviando ? (metodo === 'efectivo' ? 'Registrando…' : 'Generando…') : metodo === 'efectivo' ? 'Registrar venta e ingresar' : 'Generar QR'}
       </button>
     </form>
   );
@@ -286,9 +322,9 @@ export default function VentaPuerta() {
             <div className="card space-y-3 lg:sticky lg:top-24">
               <div>
                 <h2 id="titulo-cobro" className="text-lg font-semibold">Cobro en boletería</h2>
-                <p className="text-sm text-zinc-500 dark:text-zinc-400">Generá el cobro y mostrale el QR al cliente: paga desde su celular y se confirma solo.</p>
+                <p className="text-sm text-zinc-500 dark:text-zinc-400">Con Mercado Pago, el cliente escanea el QR y se confirma solo. En efectivo, la venta queda registrada al instante.</p>
               </div>
-              <CobroAsistido evento={qrs.evento} tipos={qrs.por_tipo} />
+              <CobroAsistido key={qrs.evento.id_evento} evento={qrs.evento} tipos={qrs.por_tipo} mercadopago={qrs.mercadopago_disponible} />
             </div>
           </section>
         </div>

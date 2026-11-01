@@ -87,14 +87,18 @@ export default function AdminVentas() {
   };
 
   if (!ventas) return <Spinner />;
-  const recaudado = ventas.filter((v) => v.estado === 'pagado').reduce((s, v) => s + Number(v.monto_total), 0);
+  const pagadas = ventas.filter((v) => v.estado === 'pagado');
+  const recaudado = pagadas.reduce((s, v) => s + Number(v.monto_total), 0);
+  // Totales separados por método (los que tuvieron ventas) y combinado
+  const porMetodo = pagadas.reduce((acc, v) => ({ ...acc, [v.metodo_pago]: (acc[v.metodo_pago] || 0) + Number(v.monto_total) }), {});
 
   return (
     <>
       <div className="mb-4">
         <div>
           <h1 className="text-3xl font-semibold tracking-tight">Ventas</h1>
-          <p className="text-sm text-zinc-500 dark:text-zinc-400">{ventas.length} ventas · recaudado {importe(recaudado)}</p>
+          <p className="text-sm text-zinc-500 dark:text-zinc-400">{ventas.length} ventas · recaudado {importe(recaudado)}
+            {Object.keys(porMetodo).length > 0 && <span className="block text-xs" data-testid="totales-metodo">{['mercadopago', 'efectivo', ...Object.keys(porMetodo).filter((m) => !['mercadopago', 'efectivo'].includes(m))].map((m) => `${{ mercadopago: 'Mercado Pago', efectivo: 'Efectivo', transferencia: 'Transferencia', cortesia: 'Cortesía' }[m] || m} ${importe(porMetodo[m] || 0)}`).join(' · ')}</span>}</p>
         </div>
       </div>
       <Alerta onClose={() => setError('')}>{error}</Alerta>

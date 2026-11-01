@@ -109,6 +109,32 @@ const ingresosEvento = async (idEvento, idTenant) => {
       WHERE v.id_evento = ?
       ORDER BY v.fecha_venta DESC, v.id_venta DESC LIMIT 10`, [idEvento]);
 
+  // Ventas por método de pago (pagadas): del evento completo y de la puerta. Una consulta agrupada.
+  const [porMetodoFilas] = await pool.query(
+    `SELECT v.metodo_pago, (v.origen IS NOT NULL) AS en_puerta, COUNT(*) AS operaciones, COALESCE(SUM(v.monto_total), 0) AS monto,
+            COALESCE(SUM((SELECT COUNT(*) FROM tickets t WHERE t.id_venta = v.id_venta AND t.estado IN ('valido','usado'))), 0) AS tickets
+       FROM ventas v WHERE v.id_evento = ? AND v.estado = 'pagado'
+      GROUP BY v.metodo_pago, en_puerta`, [idEvento]);
+  const resumenMetodos = (filas) => {
+    const porMetodo = {};
+    for (const f of filas) {
+      const m = (porMetodo[f.metodo_pago] ??= { operaciones: 0, tickets: 0, monto: 0 });
+      m.operaciones += num(f.operaciones); m.tickets += num(f.tickets); m.monto += num(f.monto);
+    }
+    const totalMonto = Object.values(porMetodo).reduce((s, m) => s + m.monto, 0);
+    const totalOps = Object.values(porMetodo).reduce((s, m) => s + m.operaciones, 0);
+    for (const m of Object.values(porMetodo)) {
+      m.monto = Math.round(m.monto * 100) / 100;
+      m.porcentaje_monto = pct(m.monto, totalMonto);
+      m.porcentaje_operaciones = pct(m.operaciones, totalOps);
+    }
+    // MercadoPago y efectivo siempre presentes (aunque sea en 0) para que el panel los muestre separados
+    for (const k of ['mercadopago', 'efectivo']) porMetodo[k] ??= { operaciones: 0, tickets: 0, monto: 0, porcentaje_monto: 0, porcentaje_operaciones: 0 };
+    return { por_metodo: porMetodo, total: { operaciones: totalOps, monto: Math.round(totalMonto * 100) / 100 } };
+  };
+  const metodosEvento = resumenMetodos(porMetodoFilas);
+  const metodosPuerta = resumenMetodos(porMetodoFilas.filter((f) => Number(f.en_puerta) === 1));
+
   const libre = capacidad ? Math.max(0, capacidad - ingresadas) : 0;
   const librePct = pct(libre, capacidad);
 
@@ -123,7 +149,9 @@ const ingresosEvento = async (idEvento, idTenant) => {
       ultimo_ingreso: ultimos.at(-1) || null,
     },
     por_tipo: porTipo,
-    puerta: { ...puerta, monto: Math.round(puerta.monto * 100) / 100 },
+    puerta: { ...puerta, monto: Math.round(puerta.monto * 100) / 100, por_metodo: metodosPuerta.por_metodo },
+    // Ventas pagadas del evento por método: operaciones, tickets, recaudación y porcentajes (separados y combinados)
+    metodos_pago: metodosEvento,
     ultimas_operaciones: ultimas.map((u) => ({
       id_venta: u.id_venta, fecha: u.fecha_venta, comprador: u.comprador, tipos: u.tipos, cantidad: num(u.cantidad),
       metodo_pago: u.metodo_pago, origen: u.origen, estado_pago: u.estado_pago, monto: num(u.monto_total),

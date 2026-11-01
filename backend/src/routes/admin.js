@@ -98,18 +98,30 @@ r.put('/event/:id/update', admin, actualizar);
 r.get('/event/:id/qr-compra', admin, asyncHandler(async (req, res) => res.json(await puerta.qrsDeCompra(req.params.id, req.tenant.id_tenant))));
 
 /**
- * POST /puerta/cobro — boletería: { id_evento, id_tipo, cantidad, comprador?: { nombre, telefono, email? } }
- * → 201 { id_venta, init_point, qr_pago (data URL), monto_total, expira_en }. No descuenta stock: lo hace el webhook.
+ * POST /puerta/cobro — boletería:
+ *   { id_evento, id_tipo, cantidad, metodo_pago: 'mercadopago' | 'efectivo', comprador?: { nombre, telefono },
+ *     observaciones?, clave: UUID de la operación (idempotencia) }
+ *   mercadopago → 201 { id_venta, init_point, qr_pago, monto_total, expira_en } (el stock baja con el webhook)
+ *   efectivo    → 201 { id_venta, estado_pago: 'approved', tickets, mensaje } (venta pagada al instante)
+ *   Misma clave otra vez → 200 con la operación ya registrada (no crea otra venta).
  */
 r.post('/puerta/cobro', admin,
   (req, _res, next) => {
     const cantidad = Number(req.body.cantidad || 1);
     if (!Number.isInteger(cantidad) || cantidad < 1 || cantidad > 50) return next(new AppError(400, 'La cantidad debe ser un entero entre 1 y 50'));
     if (!req.body.id_evento || !req.body.id_tipo) return next(new AppError(400, 'Elegí el evento y el tipo de entrada'));
+    const metodo = req.body.metodo_pago || 'mercadopago';
+    if (!['mercadopago', 'efectivo'].includes(metodo)) return next(new AppError(400, 'Método de pago inválido (mercadopago | efectivo)'));
     req.body.items = [{ id_tipo: Number(req.body.id_tipo), cantidad }];
-    req.body.metodo_pago = 'mercadopago';
+    req.body.metodo_pago = metodo;
     next();
   },
+  // Idempotencia: si esta operación (clave) ya se registró, se devuelve tal cual sin crear nada
+  asyncHandler(async (req, res, next) => {
+    const previa = await puerta.operacionPrevia(req.body.clave, req.tenant.id_tenant);
+    if (previa) return res.status(200).json(previa);
+    next();
+  }),
   // Con nombre y teléfono se identifica al comprador como siempre; sin datos, comprador anónimo de la puerta
   asyncHandler(async (req, res, next) => {
     const c = req.body.comprador || {};
@@ -119,7 +131,10 @@ r.post('/puerta/cobro', admin,
     next();
   }),
   validarCompra('puerta'),
-  asyncHandler(async (req, res) => res.status(201).json(await puerta.crearCobroAsistido(req))));
+  asyncHandler(async (req, res) => {
+    const r = req.body.metodo_pago === 'efectivo' ? await puerta.registrarVentaEfectivo(req) : await puerta.crearCobroAsistido(req);
+    res.status(r.repetida ? 200 : 201).json(r);
+  }));
 
 /** GET /puerta/cobro/:id — estado del cobro (la pantalla de boletería lo consulta cada 2 s). */
 r.get('/puerta/cobro/:id', admin, asyncHandler(async (req, res) => {

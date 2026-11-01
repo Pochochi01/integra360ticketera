@@ -956,3 +956,118 @@ test('puerta: cobro asistido en boletería → QR de pago, confirmación sin dup
   assert.match(comp.w, /^\+54911/);
 });
 
+// ── Venta en puerta en EFECTIVO ─────────────────────────────────────────────────────────────────────
+
+const { randomUUID } = require('node:crypto');
+const cobroPuerta = (body, token = datos[1].token) =>
+  api('POST', '/admin/puerta/cobro', { token, body: { id_evento: datos[1].id_evento, id_tipo: datos[1].id_tipo, cantidad: 1, ...body } });
+const contarVentas = async () => (await pool.query('SELECT COUNT(*) AS n FROM ventas'))[0][0].n;
+
+test('efectivo: venta registrada al instante, sin MercadoPago; stock, entradas, staff, observaciones y auditoría', async () => {
+  await asegurarStock(30);
+  const antes = await ingresos();
+  const stockAntes = await stockTipo(datos[1].id_tipo);
+  const prefsAntes = preferencias.length;
+
+  const r = await cobroPuerta({ metodo_pago: 'efectivo', cantidad: 2, observaciones: 'Pagó con billete de 20.000', clave: randomUUID() });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  assert.equal(r.body.mensaje, 'Venta registrada en efectivo correctamente');
+  assert.equal(r.body.estado_pago, 'approved');
+  assert.equal(r.body.tickets.length, 2, 'entradas habilitadas para ingresar');
+  assert.equal(r.body.qr_pago, undefined, 'sin QR de pago');
+  assert.equal(preferencias.length, prefsAntes, 'no consume MercadoPago');
+  assert.equal(await stockTipo(datos[1].id_tipo), stockAntes - 2, 'descuenta stock en el acto');
+
+  const [[v]] = await pool.query('SELECT metodo_pago, estado, origen, id_usuario_staff, observaciones, monto_total FROM ventas WHERE id_venta = ?', [r.body.id_venta]);
+  const [[admin]] = await pool.query("SELECT a.id_usuario FROM administradores a WHERE a.id_tenant = 1 LIMIT 1");
+  assert.deepEqual({ metodo: v.metodo_pago, estado: v.estado, origen: v.origen, obs: v.observaciones },
+    { metodo: 'efectivo', estado: 'pagado', origen: 'puerta_asistida', obs: 'Pagó con billete de 20.000' });
+  assert.equal(v.id_usuario_staff, admin.id_usuario, 'queda registrado quién vendió');
+  const [[pago]] = await pool.query('SELECT proveedor, estado, monto, id_validador, validado_en FROM pagos WHERE id_venta = ?', [r.body.id_venta]);
+  assert.equal(pago.proveedor, 'efectivo');
+  assert.equal(pago.estado, 'aprobado');
+  assert.equal(Number(pago.monto), Number(v.monto_total));
+  assert.equal(pago.id_validador, admin.id_usuario);
+  assert.ok(pago.validado_en);
+  assert.ok((await ticketsDeVenta(r.body.id_venta)).every((t) => t.estado === 'valido'));
+
+  const [[aud]] = await pool.query("SELECT detalle, id_usuario FROM auditoria_eventos WHERE accion = 'venta_puerta' ORDER BY id DESC LIMIT 1");
+  const det = typeof aud.detalle === 'string' ? JSON.parse(aud.detalle) : aud.detalle;
+  assert.deepEqual({ id: det.id_venta, metodo: det.metodo_pago, cantidad: det.cantidad }, { id: r.body.id_venta, metodo: 'efectivo', cantidad: 2 });
+  assert.equal(aud.id_usuario, admin.id_usuario);
+  // El cliente anónimo no tiene email: no se marca como «correo fallido»
+  assert.ok((await estadoCorreoTickets(r.body.id_venta)).every((t) => t.email_status === null));
+
+  // La Portería lo deja entrar
+  const [[t1]] = await pool.query('SELECT codigo_qr FROM tickets WHERE id_venta = ? LIMIT 1', [r.body.id_venta]);
+  assert.equal((await api('POST', '/porteria/validarQR', { token: await portero(), body: { codigo: t1.codigo_qr } })).body.permitido, true);
+
+  // Estadísticas: efectivo separado, en el evento y en la puerta, y totales combinados
+  const despues = await ingresos();
+  const ef = despues.metodos_pago.por_metodo.efectivo;
+  assert.equal(ef.operaciones, antes.metodos_pago.por_metodo.efectivo.operaciones + 1);
+  assert.equal(ef.tickets, antes.metodos_pago.por_metodo.efectivo.tickets + 2);
+  assert.equal(ef.monto, antes.metodos_pago.por_metodo.efectivo.monto + Number(v.monto_total));
+  assert.equal(despues.metodos_pago.total.monto, Object.values(despues.metodos_pago.por_metodo).reduce((s, m) => s + m.monto, 0));
+  const sumaPct = Object.values(despues.metodos_pago.por_metodo).reduce((s, m) => s + m.porcentaje_monto, 0);
+  assert.ok(Math.abs(sumaPct - 100) < 0.5, `los porcentajes suman 100 (${sumaPct})`);
+  assert.equal(despues.puerta.por_metodo.efectivo.operaciones, antes.puerta.por_metodo.efectivo.operaciones + 1);
+  assert.equal(despues.ultimas_operaciones[0].metodo_pago, 'efectivo');
+});
+
+test('efectivo: doble click / reintento con la misma clave registra UNA sola venta (también en simultáneo)', async () => {
+  await asegurarStock(30);
+  const stockAntes = await stockTipo(datos[1].id_tipo);
+  const ventasAntes = await contarVentas();
+
+  const clave = randomUUID();
+  const a = await cobroPuerta({ metodo_pago: 'efectivo', clave });
+  const b = await cobroPuerta({ metodo_pago: 'efectivo', clave });
+  assert.equal(a.status, 201);
+  assert.equal(b.status, 200);
+  assert.equal(b.body.repetida, true);
+  assert.equal(b.body.id_venta, a.body.id_venta);
+  assert.equal(b.body.mensaje, 'Venta registrada en efectivo correctamente');
+
+  const clave2 = randomUUID();
+  const simultaneos = await Promise.all([1, 2, 3].map(() => cobroPuerta({ metodo_pago: 'efectivo', clave: clave2 })));
+  assert.ok(simultaneos.every((x) => [200, 201].includes(x.status)), JSON.stringify(simultaneos.map((x) => x.body)));
+  assert.equal(new Set(simultaneos.map((x) => x.body.id_venta)).size, 1, 'los tres pedidos devuelven la misma venta');
+
+  assert.equal(await contarVentas(), ventasAntes + 2, 'dos operaciones → dos ventas');
+  assert.equal(await stockTipo(datos[1].id_tipo), stockAntes - 2, 'el stock baja una vez por operación');
+});
+
+test('efectivo: misma validación de stock que MercadoPago; sin stock no registra nada (rollback)', async () => {
+  const ventasAntes = await contarVentas();
+  await pool.query('UPDATE tipos_ticket SET stock_disponible = 1 WHERE id_tipo = ?', [datos[1].id_tipo]);
+  const r = await cobroPuerta({ metodo_pago: 'efectivo', cantidad: 3, clave: randomUUID() });
+  assert.equal(r.status, 409);
+  assert.match(r.body.error, /Stock insuficiente/);
+  assert.equal(await contarVentas(), ventasAntes, 'no queda ninguna venta a medias');
+  assert.equal(await stockTipo(datos[1].id_tipo), 1);
+  // Mismo criterio que con MercadoPago
+  assert.equal((await cobroPuerta({ metodo_pago: 'mercadopago', cantidad: 3, clave: randomUUID() })).status, 409);
+
+  assert.equal((await cobroPuerta({ metodo_pago: 'tarjeta' })).status, 400, 'sólo mercadopago | efectivo');
+  assert.equal((await cobroPuerta({ metodo_pago: 'efectivo' }, await portero())).status, 403, 'sólo el admin');
+  await asegurarStock(30);
+});
+
+test('mercadopago en boletería: sigue igual y ahora registra quién vendió; la misma clave devuelve el mismo QR', async () => {
+  await asegurarStock(30);
+  const clave = randomUUID();
+  const a = await cobroPuerta({ metodo_pago: 'mercadopago', cantidad: 2, observaciones: 'Mesa 4', clave });
+  assert.equal(a.status, 201, JSON.stringify(a.body));
+  assert.equal(a.body.metodo_pago, 'mercadopago');
+  assert.match(a.body.qr_pago, /^data:image\/png/);
+  const b = await cobroPuerta({ metodo_pago: 'mercadopago', cantidad: 2, clave });
+  assert.equal(b.status, 200);
+  assert.equal(b.body.id_venta, a.body.id_venta);
+  assert.equal(b.body.init_point, a.body.init_point, 'mismo link de pago, sin otra preferencia');
+  const [[v]] = await pool.query('SELECT metodo_pago, id_usuario_staff, observaciones FROM ventas WHERE id_venta = ?', [a.body.id_venta]);
+  assert.equal(v.metodo_pago, 'mercadopago');
+  assert.ok(v.id_usuario_staff);
+  assert.equal(v.observaciones, 'Mesa 4');
+});
+

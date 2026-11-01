@@ -271,3 +271,79 @@ Consultas periódicas: 10 s en el dashboard y 2 s en un cobro pendiente. No hay 
   - el cobro aprobado aparece en pantalla en 1,4 s sin recargar;
   - la landing funciona y el dashboard se actualiza;
   - sin desbordes.
+
+## Venta en puerta en efectivo (migración 018)
+
+En **Venta en puerta → Cobro en boletería**, el staff elige el **método de pago**:
+
+| Método | Botón | Qué pasa |
+|---|---|---|
+| **Mercado Pago QR** (como antes) | Generar QR | Se genera el cobro; el cliente paga desde su celular y la pantalla se confirma sola. El stock baja cuando MercadoPago aprueba |
+| **Efectivo** | Registrar venta e ingresar | Sin QR ni MercadoPago: la venta queda pagada al instante, el stock se descuenta y las entradas quedan habilitadas para la Portería. Mensaje «Venta registrada en efectivo correctamente» |
+
+Si el complejo no tiene MercadoPago conectado, la opción aparece deshabilitada y se cobra en efectivo.
+
+### Cómo se registra
+
+`registrarVentaEfectivo()` ([ventaPuerta.js](backend/src/services/ventaPuerta.js)) reutiliza el núcleo de siempre: `validarCompra('puerta')` + `ejecutarVenta(compra, { marcarPagado: true, alConfirmar })`. Todo en **una transacción**:
+
+1. Valida la disponibilidad con las filas bloqueadas, igual que con MercadoPago.
+2. Crea la venta con `metodo_pago = 'efectivo'` (el ENUM ya lo admitía desde la migración 008), `estado = 'pagado'` y `origen = 'puerta_asistida'`.
+3. Registra el pago aprobado (`proveedor = 'efectivo'`) con quién cobró (`pagos.id_validador`, `validado_en`).
+4. Descuenta el stock y habilita los tickets.
+5. Agrega la auditoría en `auditoria_eventos` (`accion = 'venta_puerta'`, con método, cantidad, importe, tipos y observaciones).
+
+Si cualquier paso falla, se revierte todo. Después de confirmar, la entrada sale por correo y WhatsApp si el cliente dejó datos.
+
+| Dato pedido | Dónde queda |
+|---|---|
+| id_venta, fecha_hora, evento, comprador, importe | `ventas` (`id_venta`, `fecha_venta`, `id_evento`, `id_usuario`, `monto_total`) |
+| cantidad | tickets de la venta |
+| metodo_pago | `ventas.metodo_pago` (`mercadopago` / `efectivo`) |
+| usuario que vendió | `ventas.id_usuario_staff` (nuevo) y, en efectivo, `pagos.id_validador` |
+| observaciones | `ventas.observaciones` (nuevo) |
+
+### Doble registro
+
+- **En la pantalla:** el botón se deshabilita mientras se envía.
+- **En el servidor**, que es la protección real: cada operación lleva una clave única (UUID) y `ventas.clave_idempotencia` es UNIQUE. Si la misma clave vuelve (doble click, reintento de red o pedidos simultáneos), se responde con la venta ya registrada (`200`, `repetida: true`) sin crear otra. Para MercadoPago devuelve el mismo QR, sin crear otra preferencia.
+
+### API
+
+```http
+POST /api/admin/puerta/cobro   (sólo admin del complejo)
+     { id_evento, id_tipo, cantidad, metodo_pago: 'mercadopago' | 'efectivo', comprador?, observaciones?, clave }
+     efectivo    → 201 { id_venta, estado_pago: 'approved', tickets, mensaje }
+     mercadopago → 201 { id_venta, init_point, qr_pago, … } (como antes)
+     misma clave → 200 { …, repetida: true }
+GET  /api/admin/event/:id/ingresos   ahora suma metodos_pago { por_metodo, total } y puerta.por_metodo
+```
+
+Cualquier otro método → 400. Sin stock → 409.
+
+### Reportes
+
+- **Control de ingresos:** tarjeta **Recaudación por método de pago**, con MercadoPago y efectivo separados (operaciones, entradas, recaudación y %) y el total combinado, para todo el evento o sólo la portería.
+- **Listado de ventas** (`/admin/ventas`): debajo del total combinado, el total de cada método.
+- **Lo que ya existía sigue igual:** la columna «Pago» del listado y el gráfico por medio de pago de las estadísticas de ventas.
+
+### Pruebas (4 nuevas, 31 en total)
+
+- **Efectivo:**
+  - 201 con el mensaje y las entradas, sin QR y sin crear preferencia en MercadoPago;
+  - el stock baja en el acto;
+  - la venta queda `efectivo`/`pagado`/`puerta_asistida` con quién vendió y las observaciones;
+  - el pago queda `efectivo`/aprobado con quién cobró;
+  - la auditoría queda en la misma transacción;
+  - la Portería deja entrar;
+  - las estadísticas suman (porcentajes que dan 100 %);
+  - un cliente anónimo no queda como «correo fallido».
+- **Doble registro:** la misma clave dos veces y tres pedidos simultáneos con otra clave dan una venta por operación, con el stock descontado una vez.
+- **Stock:** sin stock → 409 y no queda ninguna venta (rollback), igual que con MercadoPago. Otro método → 400; un portero → 403.
+- **MercadoPago en boletería:** sin cambios; ahora guarda quién vendió y las observaciones, y la misma clave devuelve el mismo QR.
+- **Navegador** (Edge, 360 y 1280 px):
+  - botones según el método;
+  - **doble click → una sola venta**;
+  - confirmación «Venta registrada en efectivo correctamente»;
+  - tabla de métodos en el dashboard y totales en Ventas;
+  - sin desbordes.

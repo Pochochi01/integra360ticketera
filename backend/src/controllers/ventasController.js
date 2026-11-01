@@ -22,13 +22,15 @@ const esStaffDe = (usuario, idTenant) => usuario.rol === 'superadmin' || (usuari
 
 /**
  * Crea la venta y sus tickets en una sola transacción.
+ * alConfirmar(conn, idVenta): pasos extra DENTRO de la misma transacción (ej. auditoría): si fallan, se revierte todo.
+ * Datos de operación opcionales en compra: origen, idStaff (quién registró), observaciones, claveIdempotencia.
  * Revalida con filas bloqueadas (FOR UPDATE) el límite por persona, el stock y los asientos.
  *
  * Stock: las ventas con MercadoPago pendientes de pago NO descuentan stock (stock_descontado = 0): sólo se
  * verifica que haya. El descuento ocurre al aprobarse el pago (pagosService.confirmarStockDeVenta), igual
  * para todos los canales. El resto (cortesías, emisiones, efectivo, transferencia) descuenta al crear.
  */
-const ejecutarVenta = async (compra, { empresa = null, marcarPagado = false, expiraEn = null } = {}) => {
+const ejecutarVenta = async (compra, { empresa = null, marcarPagado = false, expiraEn = null, alConfirmar = null } = {}) => {
   const { evento, lineas, idTitular, tipoVenta, vendedor, whatsapp } = compra;
   const total = tipoVenta === 'invitacion' ? 0 : compra.total;
   const metodoPago = total === 0 ? 'cortesia' : compra.metodoPago;
@@ -75,14 +77,18 @@ const ejecutarVenta = async (compra, { empresa = null, marcarPagado = false, exp
         monto_total: total, estado: pagado ? 'pagado' : 'pendiente', metodo_pago: metodoPago, tipo_venta: tipoVenta,
         empresa, whatsapp_contacto: whatsapp, token_acceso: generarTokenAcceso(), expira_en: pagado ? null : expiraEn,
         stock_descontado: !descontarAlAprobar, origen: compra.origen || null,
+        id_usuario_staff: compra.idStaff, observaciones: compra.observaciones, clave_idempotencia: compra.claveIdempotencia,
       },
       conn
     );
     if (pagado) {
-      await Pago.create(
-        { id_venta: idVenta, proveedor: total === 0 ? 'cortesia' : 'transferencia', estado: 'aprobado', monto: total, detalle: total === 0 ? 'Emisión sin cargo' : 'Registrado por administración' },
+      // Efectivo cobrado en el acto (boletería): pago aprobado a nombre de quien recibió el dinero
+      const proveedor = total === 0 ? 'cortesia' : metodoPago === 'efectivo' ? 'efectivo' : 'transferencia';
+      const idPago = await Pago.create(
+        { id_venta: idVenta, proveedor, estado: 'aprobado', monto: total, detalle: total === 0 ? 'Emisión sin cargo' : proveedor === 'efectivo' ? 'Cobrado en efectivo en la puerta' : 'Registrado por administración' },
         conn
       );
+      if (proveedor === 'efectivo' && compra.idStaff) await Pago.registrarValidacion(idPago, compra.idStaff, conn);
     }
 
     const filas = [];
@@ -94,6 +100,7 @@ const ejecutarVenta = async (compra, { empresa = null, marcarPagado = false, exp
     }
     await Ticket.createMany(filas, conn);
     if (!descontarAlAprobar) await Evento.actualizarEstadoPorStock(evento.id_evento, conn);
+    if (alConfirmar) await alConfirmar(conn, idVenta);
 
     return { venta: await Venta.findById(idVenta, conn), tickets: await Ticket.findByVenta(idVenta, conn) };
   });

@@ -57,14 +57,19 @@ const Venta = {
 
   create: async (d, db) => {
     const [r] = await db.query(
-      `INSERT INTO ventas (id_usuario, id_vendedor, id_evento, monto_total, estado, metodo_pago, tipo_venta, empresa, whatsapp_contacto, token_acceso, expira_en, stock_descontado, origen)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO ventas (id_usuario, id_vendedor, id_evento, monto_total, estado, metodo_pago, tipo_venta, empresa, whatsapp_contacto, token_acceso, expira_en, stock_descontado, origen,
+                           id_usuario_staff, observaciones, clave_idempotencia)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [d.id_usuario, d.id_vendedor || null, d.id_evento, d.monto_total, d.estado, d.metodo_pago, d.tipo_venta || 'normal',
-        d.empresa || null, d.whatsapp_contacto || null, d.token_acceso, d.expira_en || null, d.stock_descontado === false ? 0 : 1, d.origen || null]
+        d.empresa || null, d.whatsapp_contacto || null, d.token_acceso, d.expira_en || null, d.stock_descontado === false ? 0 : 1, d.origen || null,
+        d.id_usuario_staff || null, d.observaciones || null, d.clave_idempotencia || null]
     );
     if (d.id_link) await db.query('INSERT INTO ventas_link (id_venta, id_link) VALUES (?, ?)', [r.insertId, d.id_link]);
     return r.insertId;
   },
+
+  /** Venta registrada con esa clave de idempotencia (boletería: doble click / reintento). */
+  findByClave: async (clave, db = pool) => (await db.query('SELECT id_venta FROM ventas WHERE clave_idempotencia = ?', [clave]))[0][0],
 
   setEstado: (id, estado, db) => db.query('UPDATE ventas SET estado = ? WHERE id_venta = ?', [estado, id]),
 

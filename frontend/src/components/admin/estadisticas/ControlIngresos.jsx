@@ -80,6 +80,64 @@ const hora = (f) => new Date(String(f).replace(' ', 'T')).toLocaleTimeString('es
 
 const ESTADOS_EVENTO = [['', 'Todos'], ['publicado', 'Publicados'], ['agotado', 'Agotados'], ['finalizado', 'Finalizados'], ['borrador', 'Borradores']];
 
+/**
+ * Recaudación por método de pago (ventas pagadas): Mercado Pago y efectivo separados — operaciones, entradas,
+ * monto y % — y el total combinado, para el evento completo y para la puerta. Barra 100 % apilada con hueco del
+ * color de fondo entre segmentos; cada fila lleva su valor escrito (la identidad no depende sólo del color).
+ */
+function MetodosPago({ datos, modo }) {
+  const [ambito, setAmbito] = useState('evento');
+  const fuente = ambito === 'evento' ? datos.metodos_pago : { por_metodo: datos.puerta.por_metodo };
+  if (!fuente?.por_metodo) return null;
+  const colores = { mercadopago: CATEGORICA[modo][0], efectivo: CATEGORICA[modo][1] };
+  const orden = ['mercadopago', 'efectivo', ...Object.keys(fuente.por_metodo).filter((m) => !['mercadopago', 'efectivo'].includes(m))];
+  const filas = orden.map((m) => ({ metodo: m, ...fuente.por_metodo[m] })).filter((f) => f.operaciones > 0 || ['mercadopago', 'efectivo'].includes(f.metodo));
+  const total = { operaciones: filas.reduce((s, f) => s + f.operaciones, 0), tickets: filas.reduce((s, f) => s + f.tickets, 0), monto: filas.reduce((s, f) => s + f.monto, 0) };
+  return (
+    <Tarjeta titulo="Recaudación por método de pago" accion={
+      <div className="inline-flex rounded-lg bg-zinc-100 p-0.5 text-xs dark:bg-white/5" role="group" aria-label="Ámbito">
+        {[['evento', 'Todo el evento'], ['puerta', 'Sólo portería']].map(([v, t]) => (
+          <button key={v} type="button" aria-pressed={ambito === v} onClick={() => setAmbito(v)}
+            className={`min-h-8 rounded-md px-2.5 font-medium transition-colors ${ambito === v ? 'bg-white shadow-sm dark:bg-zinc-700' : 'text-zinc-500 dark:text-zinc-400'}`}>{t}</button>
+        ))}
+      </div>
+    }>
+      <div data-testid="metodos-pago">
+        {total.monto > 0 && (
+          <div className="mb-4 flex h-3 gap-0.5 overflow-hidden rounded-full" aria-hidden>
+            {filas.filter((f) => f.monto > 0).map((f) => <div key={f.metodo} style={{ width: `${(f.monto / total.monto) * 100}%`, backgroundColor: colores[f.metodo] || OTROS }} />)}
+          </div>
+        )}
+        <div className="overflow-x-auto overscroll-x-contain">
+          <table className="w-full text-sm tabular-nums">
+            <thead className="text-left text-xs text-zinc-500 dark:text-zinc-400">
+              <tr><th className="pb-2 font-medium">Método</th><th className="pb-2 text-right font-medium"><span className="sm:hidden">Ops.</span><span className="hidden sm:inline">Operaciones</span></th><th className="hidden pb-2 text-right font-medium sm:table-cell">Entradas</th><th className="pb-2 text-right font-medium">Recaudación</th><th className="pb-2 text-right font-medium">%</th></tr>
+            </thead>
+            <tbody className="divide-y divide-zinc-100 dark:divide-white/5">
+              {filas.map((f) => (
+                <tr key={f.metodo}>
+                  <td className="py-2"><span className="mr-2 inline-block h-2.5 w-2.5 rounded-sm align-middle" style={{ backgroundColor: colores[f.metodo] || OTROS }} aria-hidden />{METODOS[f.metodo] || f.metodo}</td>
+                  <td className="py-2 text-right">{entero.format(f.operaciones)}</td>
+                  <td className="hidden py-2 text-right sm:table-cell">{entero.format(f.tickets)}</td>
+                  <td className="py-2 text-right">{importe(f.monto)}</td>
+                  <td className="py-2 text-right text-zinc-500 dark:text-zinc-400">{pct(f.monto, total.monto)}%</td>
+                </tr>
+              ))}
+              <tr className="font-semibold">
+                <td className="pt-2">Total</td>
+                <td className="pt-2 text-right">{entero.format(total.operaciones)}</td>
+                <td className="hidden pt-2 text-right sm:table-cell">{entero.format(total.tickets)}</td>
+                <td className="pt-2 text-right">{importe(total.monto)}</td>
+                <td className="pt-2 text-right text-zinc-500 dark:text-zinc-400">{total.monto ? '100%' : '—'}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </Tarjeta>
+  );
+}
+
 export default function ControlIngresos() {
   const { tema } = useTema();
   const modo = tema === 'oscuro' ? 'oscuro' : 'claro';
@@ -282,6 +340,8 @@ export default function ControlIngresos() {
               )}
             </Tarjeta>
           </div>
+
+          <MetodosPago datos={datos} modo={modo} />
 
           {k.vendidas === 0 ? (
             <Vacio icono={Ticket} titulo="Todavía no hay entradas vendidas">Cuando se confirmen ventas, acá vas a ver los ingresos por tipo.</Vacio>

@@ -100,7 +100,7 @@ const armarCorreo = ({ venta, tickets }) => {
 const enviarEntradasPorCorreo = async (idVenta) => {
   try {
     const [[venta]] = await pool.query(
-      `SELECT v.id_venta, v.estado, v.token_acceso, e.nombre AS evento, e.fecha AS fecha_evento, tn.nombre AS tenant,
+      `SELECT v.id_venta, v.estado, v.token_acceso, v.origen, e.nombre AS evento, e.fecha AS fecha_evento, tn.nombre AS tenant,
               CONCAT_WS(' ', u.nombre, u.apellido) AS comprador, u.email
          FROM ventas v JOIN eventos e ON e.id_evento = v.id_evento JOIN tenants tn ON tn.id_tenant = e.id_tenant
          JOIN usuarios u ON u.id_usuario = v.id_usuario WHERE v.id_venta = ?`, [idVenta]);
@@ -113,6 +113,8 @@ const enviarEntradasPorCorreo = async (idVenta) => {
       'UPDATE tickets SET email_status = ?, email_sent_at = NOW(), email_error = ? WHERE id_ticket IN (?)', [estado, error, ids]);
     const resultado = (estado, extra = {}) => ({ estado, destino: venta.email, tickets: tickets.map((t) => ({ id_ticket: t.id_ticket, url: t.url })), ...extra });
 
+    // Venta de boletería sin datos del cliente: la entrada la ve en su celular / en la pantalla; no es un fallo
+    if (!venta.email && venta.origen === 'puerta_asistida') return resultado(null, { enviado: false, motivo: 'Venta en puerta sin email del cliente' });
     if (!venta.email) {
       await marcar('failed', 'El comprador no tiene email');
       return resultado('failed', { enviado: false, motivo: 'El comprador no tiene email' });

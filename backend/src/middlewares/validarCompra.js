@@ -109,6 +109,11 @@ const validarCompra = (tipoVenta = 'normal') => async (req, _res, next) => {
           ? 'El complejo no tiene habilitado el pago en efectivo'
           : 'El complejo no tiene MercadoPago conectado: pedile al administrador que lo conecte');
       }
+    } else if (esPuerta) {
+      const metodos = (await metodosDisponibles(evento.id_tenant)).filter((m) => m === 'mercadopago').concat('efectivo');
+      if (total > 0 && !metodos.includes(metodo_pago)) {
+        throw new AppError(409, metodo_pago === 'mercadopago' ? 'El complejo no tiene MercadoPago conectado: cobrá en efectivo o conectalo en Integraciones' : 'Método de pago inválido (mercadopago | efectivo)');
+      }
     } else if (tipoVenta === 'normal' || esLink) {
       const metodos = await metodosDisponibles(evento.id_tenant);
       if (total > 0 && !metodos.includes(metodo_pago)) throw new AppError(400, `Método de pago no disponible en este complejo (${metodos.join(', ')})`);

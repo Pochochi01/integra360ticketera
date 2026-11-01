@@ -18,8 +18,14 @@ const { AppError } = require('../utils/errors');
  *
  *  - Compra por QR (/comprar/evento/:id, /comprar/:id/:tipo): datos para la landing de compra rápida. El pago lo
  *    hace POST /api/ventas/checkout con { event_id, origen: 'puerta_qr' }.
- *  - Cobro asistido en boletería (/admin/porteros/venta): el staff genera el cobro y muestra el QR de pago; el
- *    cliente paga desde su celular y la pantalla del staff confirma sola (consulta el estado cada 2 s).
+ *  - Cobro asistido en boletería (/admin/porteros/venta), con dos medios:
+ *      · mercadopago: el staff genera el cobro y muestra el QR de pago; el cliente paga desde su celular y la
+ *        pantalla confirma sola (consulta el estado cada 2 s). El stock baja cuando MercadoPago aprueba.
+ *      · efectivo: el staff cobra en mano y registra la venta al instante, sin tocar MercadoPago: venta pagada,
+ *        stock descontado y entradas habilitadas en una sola transacción (registrarVentaEfectivo).
+ *    Ambos: misma validación de stock (validarCompra('puerta') + filas bloqueadas en ejecutarVenta), quién la
+ *    registró (ventas.id_usuario_staff), observaciones, auditoría en la misma transacción y una clave de
+ *    idempotencia por operación (un doble click o un reintento no registra dos ventas).
  */
 const frontend = () => (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
 
@@ -74,7 +80,9 @@ const qrsDeCompra = async (idEvento, idTenant) => {
   const evento = await Evento.findById(Number(idEvento));
   if (!evento || evento.id_tenant !== idTenant) throw new AppError(404, 'Evento no encontrado');
   const tipos = (await TipoTicket.findByEvento(evento.id_evento)).filter((t) => t.activo && !t.solo_admin);
+  const cuenta = await MercadoPagoToken.publica(evento.id_tenant);
   return {
+    mercadopago_disponible: Boolean(cuenta?.conectado && cuenta.activo),
     evento: { id_evento: evento.id_evento, nombre: evento.nombre, fecha: evento.fecha, lugar: evento.lugar, estado: evento.estado, tiene_seating: Boolean(evento.tiene_seating) },
     general: { url: urlCompra(evento.id_evento) },
     por_tipo: tipos.map((t) => ({ id_tipo: t.id_tipo, nombre: t.nombre_tipo, precio: Number(t.precio), slug: slugTipo(t.nombre_tipo), url: urlCompra(evento.id_evento, t) })),
@@ -92,13 +100,98 @@ const compradorAnonimo = async () => Usuario.create({
 });
 
 const MINUTOS_COBRO = () => Number(process.env.PUERTA_COBRO_MIN || 15);
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Datos de operación de boletería que viajan con la compra (los guarda ejecutarVenta). */
+const datosOperacion = (req) => {
+  const obs = req.body.observaciones ? String(req.body.observaciones).trim().slice(0, 255) : null;
+  Object.assign(req.compra, {
+    origen: 'puerta_asistida', idStaff: req.usuario.id_usuario, observaciones: obs || null,
+    claveIdempotencia: UUID_RE.test(String(req.body.clave || '')) ? String(req.body.clave).toLowerCase() : null,
+  });
+};
+
+/** Auditoría de la venta de boletería, DENTRO de la transacción de ejecutarVenta (si falla, se revierte todo). */
+const auditar = (req) => (conn, idVenta) => conn.query(
+  'INSERT INTO auditoria_eventos (id_evento, id_usuario, accion, detalle) VALUES (?, ?, ?, ?)',
+  [req.compra.evento.id_evento, req.usuario.id_usuario, 'venta_puerta', JSON.stringify({
+    id_venta: idVenta, metodo_pago: req.compra.metodoPago, cantidad: req.compra.cantidadTotal, importe: req.compra.total,
+    tipos: req.compra.lineas.map((l) => ({ id_tipo: l.id_tipo, tipo: l.tipo.nombre_tipo, cantidad: l.cantidad })),
+    observaciones: req.compra.observaciones,
+  })]
+);
+
+/**
+ * Respuesta de una operación de boletería ya registrada (reintento con la misma clave): mismo resultado que la
+ * primera vez, sin crear nada. Para MercadoPago se reconstruye el QR desde el init_point guardado.
+ */
+const respuestaRegistrada = async (idVenta, idTenant) => {
+  const estado = await estadoCobro(idVenta, idTenant);
+  const venta = await Venta.findById(idVenta);
+  if (venta.metodo_pago === 'efectivo') return { ...estado, metodo_pago: 'efectivo', repetida: true, cantidad: venta.cantidad_tickets, mensaje: 'Venta registrada en efectivo correctamente' };
+  const [[pago]] = await pool.query("SELECT detalle FROM pagos WHERE id_venta = ? AND proveedor = 'mercadopago' ORDER BY id_pago DESC LIMIT 1", [idVenta]);
+  let initPoint = null;
+  try { initPoint = JSON.parse(pago?.detalle || '{}').init_point || null; } catch { initPoint = null; }
+  return {
+    ...estado, metodo_pago: 'mercadopago', repetida: true, init_point: initPoint, cantidad: venta.cantidad_tickets,
+    qr_pago: initPoint ? await QRCode.toDataURL(initPoint, { width: 360, margin: 1, errorCorrectionLevel: 'M' }) : null,
+  };
+};
+
+/** Si la clave ya registró una venta, devuelve esa operación (doble click / reintento). */
+const operacionPrevia = async (clave, idTenant) => {
+  if (!UUID_RE.test(String(clave || ''))) return null;
+  const previa = await Venta.findByClave(String(clave).toLowerCase());
+  return previa ? respuestaRegistrada(previa.id_venta, idTenant) : null;
+};
+
+/** Ejecuta la venta; si dos pedidos simultáneos con la misma clave chocan (UNIQUE), señala la que ganó. */
+const ejecutarIdempotente = async (req, opciones) => {
+  const { ejecutarVenta } = require('../controllers/ventasController'); // diferido: dependencia circular
+  try {
+    return await ejecutarVenta(req.compra, opciones);
+  } catch (e) {
+    if (e.code === 'ER_DUP_ENTRY' && req.compra.claveIdempotencia && /idempotencia/.test(e.sqlMessage || '')) {
+      const previa = await Venta.findByClave(req.compra.claveIdempotencia);
+      if (previa) { const err = new Error('Operación ya registrada'); err.previa = previa.id_venta; throw err; }
+    }
+    throw e;
+  }
+};
+
+/**
+ * Venta en EFECTIVO en la boletería: no usa MercadoPago. En UNA transacción (ejecutarVenta con marcarPagado):
+ * valida stock con filas bloqueadas, registra la venta con metodo_pago = 'efectivo', el pago aprobado a nombre de
+ * quien cobró, descuenta el stock, habilita los tickets y audita. Cualquier fallo revierte todo.
+ */
+const registrarVentaEfectivo = async (req) => {
+  datosOperacion(req);
+  let resultado;
+  try {
+    resultado = await ejecutarIdempotente(req, { marcarPagado: true, alConfirmar: auditar(req) });
+  } catch (e) {
+    if (e.previa) return respuestaRegistrada(e.previa, req.tenant.id_tenant);
+    throw e;
+  }
+  return {
+    ...(await estadoCobro(resultado.venta.id_venta, req.tenant.id_tenant)),
+    metodo_pago: 'efectivo', cantidad: req.compra.cantidadTotal, mensaje: 'Venta registrada en efectivo correctamente',
+  };
+};
 
 /** Crea la venta (sin descontar stock) y la preferencia; devuelve el QR de pago para mostrar en pantalla. */
 const crearCobroAsistido = async (req) => {
-  const { ejecutarVenta, liberarVenta } = require('../controllers/ventasController'); // diferido: dependencia circular
-  req.compra.origen = 'puerta_asistida';
+  const { liberarVenta } = require('../controllers/ventasController'); // diferido: dependencia circular
+  datosOperacion(req);
   const vence = Math.min(Date.now() + MINUTOS_COBRO() * 60 * 1000, new Date(req.compra.evento.fecha).getTime() + 6 * 3600 * 1000);
-  const { venta, tickets } = await ejecutarVenta(req.compra, { expiraEn: new Date(vence) });
+  let venta;
+  let tickets;
+  try {
+    ({ venta, tickets } = await ejecutarIdempotente(req, { expiraEn: new Date(vence), alConfirmar: auditar(req) }));
+  } catch (e) {
+    if (e.previa) return respuestaRegistrada(e.previa, req.tenant.id_tenant);
+    throw e;
+  }
   let pref;
   try {
     const cp = req.body.comprador || {};
@@ -115,6 +208,7 @@ const crearCobroAsistido = async (req) => {
   const cuenta = await MercadoPagoToken.publica(venta.id_tenant);
   const initPoint = cuenta && !cuenta.live_mode && pref.sandbox_init_point ? pref.sandbox_init_point : pref.init_point;
   return {
+    metodo_pago: 'mercadopago', estado_pago: 'pending',
     id_venta: venta.id_venta, init_point: initPoint, monto_total: Number(venta.monto_total), cantidad: req.compra.cantidadTotal,
     expira_en: new Date(vence).toISOString(),
     qr_pago: await QRCode.toDataURL(initPoint, { width: 360, margin: 1, errorCorrectionLevel: 'M' }),
@@ -134,4 +228,4 @@ const estadoCobro = async (idVenta, idTenant) => {
   return { ...base, entrada_url: `${frontend()}/entrada/${venta.token_acceso}`, tickets: tickets.map((t) => ({ id_ticket: t.id_ticket, numero: t.numero, tipo: t.nombre_tipo, url: t.url })) };
 };
 
-module.exports = { datosCompraRapida, qrsDeCompra, crearCobroAsistido, estadoCobro, compradorAnonimo, slugTipo, urlCompra };
+module.exports = { datosCompraRapida, qrsDeCompra, crearCobroAsistido, registrarVentaEfectivo, operacionPrevia, estadoCobro, compradorAnonimo, slugTipo, urlCompra };
