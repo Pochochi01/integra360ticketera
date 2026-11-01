@@ -63,7 +63,7 @@ export default function AdminPorteros() {
     try {
       const r = await porterosApi.crear(nuevo);
       setNuevo(null);
-      setCredenciales({ titulo: `Portero creado: ${r.portero.nombre}${r.portero.apellido ? ` ${r.portero.apellido}` : ''}`, ...r.credenciales });
+      setCredenciales({ titulo: `${r.portero.rol === 'cobrador' ? 'Cobrador' : 'Portero'} creado: ${r.portero.nombre}${r.portero.apellido ? ` ${r.portero.apellido}` : ''}`, ...r.credenciales });
       await cargar();
     } catch (err) {
       setError(mensajeError(err));
@@ -105,7 +105,7 @@ export default function AdminPorteros() {
           </p>
         </div>
         {tab === 'equipo' && (
-          <button className="btn-primary" onClick={() => setNuevo({ nombre: '', apellido: '' })}>
+          <button className="btn-primary" onClick={() => setNuevo({ nombre: '', apellido: '', rol: 'portero' })}>
             <UserPlus size={18} weight="bold" aria-hidden /> Nuevo portero
           </button>
         )}
@@ -121,7 +121,7 @@ export default function AdminPorteros() {
         <section className="min-w-0 lg:col-span-3">
           {porteros.length === 0 ? (
             <Vacio icono={DoorOpen} titulo="Todavía no hay porteros"
-              accion={<button className="btn-primary mt-2" onClick={() => setNuevo({ nombre: '', apellido: '' })}>Crear el primero</button>}>
+              accion={<button className="btn-primary mt-2" onClick={() => setNuevo({ nombre: '', apellido: '', rol: 'portero' })}>Crear el primero</button>}>
               Creá un usuario por persona que controle la puerta. El sistema genera el usuario y la contraseña.
             </Vacio>
           ) : (
@@ -141,6 +141,7 @@ export default function AdminPorteros() {
                       <div className="flex items-center gap-2">
                         <p className="truncate font-medium">{p.nombre} {p.apellido}</p>
                         <Badge estado={p.estado === 'activo' ? 'valido' : 'usado'} texto={p.estado} />
+                        <Badge estado={p.rol === 'cobrador' ? 'notificado' : 'borrador'} texto={p.rol === 'cobrador' ? 'cobrador' : 'portero'} />
                       </div>
                       <p className="mt-0.5 truncate font-mono text-sm text-indigo-700 dark:text-indigo-300">{p.usuario}</p>
                       <p className="mt-1 text-xs tabular-nums text-zinc-500 dark:text-zinc-400">
@@ -148,6 +149,8 @@ export default function AdminPorteros() {
                       </p>
                     </div>
                     <div className="flex shrink-0 flex-wrap gap-2">
+                      <button className="btn-secondary py-1!" onClick={() => accion(() => porterosApi.actualizar(p.id_portero, { rol: p.rol === 'cobrador' ? 'portero' : 'cobrador' }))}
+                        title="Cambia la pantalla a la que accede">Pasar a {p.rol === 'cobrador' ? 'portero' : 'cobrador'}</button>
                       <button className="btn-secondary py-1!" onClick={() => regenerar(p)}><Key size={16} weight="bold" aria-hidden /> Contraseña</button>
                       <button className="btn-secondary py-1!" onClick={() => accion(() => porterosApi.actualizar(p.id_portero, { estado: p.estado === 'activo' ? 'inactivo' : 'activo' }))}>
                         {p.estado === 'activo' ? 'Desactivar' : 'Activar'}
@@ -187,8 +190,19 @@ export default function AdminPorteros() {
       </div>}
 
       {nuevo && (
-        <Modal titulo="Nuevo portero" onClose={() => setNuevo(null)}>
+        <Modal titulo="Nuevo integrante de la puerta" onClose={() => setNuevo(null)}>
           <form onSubmit={crear} className="space-y-3">
+            {/* Función: define a qué pantalla accede (nada más) */}
+            <fieldset className="grid grid-cols-2 gap-2">
+              <legend className="label">Función</legend>
+              {[['portero', 'Portero', 'Escanea entradas en la Portería'], ['cobrador', 'Cobrador', 'Cobra en la boletería']].map(([v, t, d]) => (
+                <label key={v} className={`cursor-pointer rounded-xl p-3 text-sm ring-1 ${nuevo.rol === v ? 'bg-indigo-50 ring-2 ring-indigo-500 dark:bg-indigo-500/10' : 'ring-zinc-900/10 dark:ring-white/10'}`}>
+                  <input type="radio" name="rol-puerta" className="sr-only" checked={nuevo.rol === v} onChange={() => setNuevo({ ...nuevo, rol: v })} />
+                  <span className="block font-medium">{t}</span>
+                  <span className="block text-xs text-zinc-500 dark:text-zinc-400">{d}</span>
+                </label>
+              ))}
+            </fieldset>
             <div className="grid gap-3 sm:grid-cols-2">
               <div>
                 <label className="label" htmlFor="portero-nombre">Nombre</label>
@@ -199,7 +213,7 @@ export default function AdminPorteros() {
                 <input id="portero-apellido" className="input" maxLength={80} value={nuevo.apellido} onChange={(e) => setNuevo({ ...nuevo, apellido: e.target.value })} />
               </div>
             </div>
-            <p className="text-sm text-zinc-500 dark:text-zinc-400">El usuario y la contraseña se generan automáticamente. Sólo podrá usar la Portería.</p>
+            <p className="text-sm text-zinc-500 dark:text-zinc-400">El usuario y la contraseña se generan automáticamente. {nuevo.rol === 'cobrador' ? 'Sólo podrá usar la boletería (cobro de entradas).' : 'Sólo podrá usar la Portería.'}</p>
             <button className="btn-primary w-full" disabled={guardando}>{guardando ? 'Creando…' : 'Crear y generar acceso'}</button>
           </form>
         </Modal>

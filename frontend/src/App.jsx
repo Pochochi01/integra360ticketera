@@ -20,6 +20,7 @@ import SuperPlataforma from './pages/super/SuperPlataforma';
 import Porteria from './pages/Porteria';
 import Checkout from './pages/Checkout';
 import VentaLink from './pages/VentaLink';
+import { TerminalCobro } from './components/admin/estadisticas/VentaPuerta';
 import CompraRapida from './pages/CompraRapida';
 import AvisoActualizacion from './components/AvisoActualizacion';
 import VendedorPanel from './pages/vendedor/VendedorPanel';
@@ -46,12 +47,32 @@ function Protegida({ children, roles, requiereTenant = false, estricta = false }
   return children;
 }
 
+const RUTA_BOLETERIA = '/admin/porteros/venta';
+
+/**
+ * Modo terminal del cobrador: su única pantalla es la boletería. Cualquier otra URL (escrita a mano, un link
+ * viejo, el botón atrás) lo devuelve ahí. El backend además responde 403 en todo lo demás.
+ */
+function TerminalCobrador({ children }) {
+  const { usuario } = useAuth();
+  const { pathname } = useLocation();
+  if (usuario?.rol === 'cobrador' && pathname !== RUTA_BOLETERIA) return <Navigate to={RUTA_BOLETERIA} replace />;
+  return children;
+}
+
+/** /admin/porteros/venta: el admin ve su panel con pestañas; el cobrador, sólo la terminal de cobro. */
+function RutaBoleteria() {
+  const { usuario } = useAuth();
+  return usuario?.rol === 'cobrador' ? <TerminalCobro /> : <AdminPorteros />;
+}
+
 /** Inicio según el rol: el personal va a su panel; visitantes y compradores ven la página de inicio. */
 function Inicio() {
   const { usuario } = useAuth();
   if (usuario?.rol === 'vendedor') return <Navigate to="/vendedor" replace />;
   if (usuario?.rol === 'admin') return <Navigate to="/admin/eventos" replace />;
   if (usuario?.rol === 'portero') return <Navigate to="/porteria" replace />;
+  if (usuario?.rol === 'cobrador') return <Navigate to={RUTA_BOLETERIA} replace />;
   return <PaginaInicio />;
 }
 
@@ -88,6 +109,7 @@ export default function App() {
         transition={{ duration: 0.2, ease: [0.23, 1, 0.32, 1] }}
         className={pantallaCompleta ? '' : 'mx-auto max-w-6xl px-4 pb-[calc(4rem+env(safe-area-inset-bottom))] pt-6 sm:px-6 sm:pt-8 lg:px-8'}
       >
+        <TerminalCobrador>
         <Routes>
           {/* Público / comprador */}
           <Route path="/" element={<Inicio />} />
@@ -115,7 +137,8 @@ export default function App() {
 
           {/* Admin del tenant */}
           <Route path="/admin/porteros" element={<Protegida {...admin}><AdminPorteros /></Protegida>} />
-          <Route path="/admin/porteros/venta" element={<Protegida {...admin}><AdminPorteros /></Protegida>} />
+          {/* Boletería: admin y cobradores (el cobrador, en modo terminal) */}
+          <Route path="/admin/porteros/venta" element={<Protegida roles={['admin', 'cobrador']} requiereTenant><RutaBoleteria /></Protegida>} />
           <Route path="/acceso" element={<Navigate to="/admin/porteros" replace />} />
           <Route path="/admin/eventos" element={<Protegida {...admin}><AdminEventos /></Protegida>} />
           <Route path="/admin/vendedores" element={<Protegida {...admin}><AdminVendedores /></Protegida>} />
@@ -131,6 +154,7 @@ export default function App() {
 
           <Route path="*" element={<NoEncontrada />} />
         </Routes>
+        </TerminalCobrador>
       </motion.main>
       <AvisoActualizacion />
     </div>

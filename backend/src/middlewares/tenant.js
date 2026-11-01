@@ -1,7 +1,7 @@
 const Tenant = require('../models/Tenant');
 const Vendedor = require('../models/Vendedor');
 const Portero = require('../models/Portero');
-const { verificarToken, requiereRol, exigirRol } = require('./auth');
+const { verificarToken, requiereRol, exigirRol, requierePermiso } = require('./auth');
 const { AppError } = require('../utils/errors');
 
 const lista = (valor) => valor.split(',').map((d) => d.trim().toLowerCase()).filter(Boolean);
@@ -96,11 +96,30 @@ const porteroActivo = async (req, _res, next) => {
   }
 };
 
+/**
+ * Personal de puerta (tabla porteros) con rol cobrador: exige que esté activo. Se consulta en cada petición:
+ * desactivarlo lo deja afuera al instante aunque su JWT siga vigente. Para otros roles no hace nada.
+ */
+const cobradorActivo = async (req, res, next) => {
+  if (req.usuario.rol !== 'cobrador') return next();
+  try {
+    const persona = await Portero.findByUsuario(req.usuario.id_usuario);
+    if (!persona || persona.id_tenant !== req.tenant.id_tenant) throw new AppError(403, 'No es cobrador de este complejo');
+    if (persona.estado !== 'activo') throw new AppError(403, 'Su usuario de cobrador está desactivado');
+    req.cobrador = persona;
+    next();
+  } catch (err) {
+    next(err);
+  }
+};
+
 /** Cadenas listas para usar en las rutas. */
 const staff = (...roles) => [verificarToken, requiereRol(...roles), tenantDeSesion];
 const soloVendedor = [verificarToken, requiereRol('vendedor'), tenantDeSesion, vendedorActivo];
 // Sólo porteros: sin la excepción habitual del superadmin (nadie más valida en la puerta)
 const soloPortero = [verificarToken, exigirRol('portero'), tenantDeSesion, porteroActivo];
+// Boletería: admin (o superadmin con complejo elegido) y cobradores activos, con el permiso de acceso
+const staffBoleteria = [verificarToken, requiereRol('admin', 'cobrador'), tenantDeSesion, cobradorActivo, requierePermiso('acceso_boleteria')];
 
 /** Lanza 404 si el recurso no pertenece al tenant de la sesión (no revela que existe en otro tenant). */
 const asegurarTenant = (recurso, req, mensaje = 'Recurso no encontrado') => {
@@ -108,4 +127,4 @@ const asegurarTenant = (recurso, req, mensaje = 'Recurso no encontrado') => {
   return recurso;
 };
 
-module.exports = { resolverTenant, tenantDeSesion, vendedorActivo, porteroActivo, staff, soloVendedor, soloPortero, asegurarTenant, slugDesdeHost };
+module.exports = { resolverTenant, tenantDeSesion, vendedorActivo, porteroActivo, cobradorActivo, staff, soloVendedor, soloPortero, staffBoleteria, asegurarTenant, slugDesdeHost };

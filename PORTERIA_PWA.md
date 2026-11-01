@@ -347,3 +347,84 @@ Cualquier otro método → 400. Sin stock → 409.
   - confirmación «Venta registrada en efectivo correctamente»;
   - tabla de métodos en el dashboard y totales en Ventas;
   - sin desbordes.
+
+## Rol cobrador de portería (migración 019)
+
+Usuario exclusivo para cobrar en la boletería: su única pantalla es `/admin/porteros/venta`, en modo terminal.
+
+### Roles y pertenencia
+
+`usuarios.rol` suma `cobrador`. La pertenencia al complejo reutiliza la tabla **`porteros`**, que pasa a ser el personal de puerta: usuario generado para ingresar, contraseña generada, estado y complejo. La función la define el rol:
+
+| Rol | Única pantalla | Backend |
+|---|---|---|
+| `portero` | Portería (`/porteria`) | sólo `/api/porteria/*` (`soloPortero`) |
+| `cobrador` | Boletería (`/admin/porteros/venta`) | sólo `/api/admin/puerta/*` (`staffBoleteria`) |
+
+El admin lo da de alta en **Porteros → Porteros → Nuevo integrante** eligiendo la **Función** (portero o cobrador). Después se puede cambiar con «Pasar a cobrador / portero». Desactivarlo lo deja afuera al instante, porque se verifica en cada pedido aunque su JWT siga vigente.
+
+### Permisos
+
+Están en una fuente única, declarativa: [config/permisos.js](backend/src/config/permisos.js).
+
+| Permiso | admin | cobrador |
+|---|---|---|
+| `acceso_boleteria` | ✓ | ✓ |
+| `venta_efectivo` | ✓ | ✓ |
+| `venta_qr` | ✓ | ✓ |
+
+- **Backend:** exige los permisos con `requierePermiso(...)`.
+- **Frontend:** los recibe en la sesión (`usuario.permisos` en el login y en `/auth/me`).
+- **Configuración del club:** además, el club decide en **Mi complejo → «Boletería: sólo efectivo»** (`tenants.boleteria_solo_efectivo`). Activado, Mercado Pago se oculta en la boletería para todos y el servidor lo rechaza con 403.
+
+### Control de acceso
+
+- **Backend:** la boletería usa `staffBoleteria`: JWT válido, rol admin o cobrador, complejo de la sesión, cobrador activo y permiso `acceso_boleteria`. El resto del panel sigue exigiendo `admin`, así que el cobrador recibe **403** en todo lo demás (probado sobre 14 rutas). Tampoco escanea en la Portería, y un portero no cobra.
+- **Frontend:**
+  - al iniciar sesión, el cobrador va directo a `/admin/porteros/venta`;
+  - `TerminalCobrador` lo devuelve ahí ante cualquier otra URL;
+  - el menú muestra sólo «Cobro en boletería» y «Salir».
+
+### Terminal de cobro
+
+- Selector de evento sólo si hay más de uno cobrable. No aparecen los eventos con asientos numerados, porque hay que elegir butaca.
+- Tipos de entrada en botones grandes; los agotados aparecen deshabilitados.
+- **Efectivo preseleccionado.** Mercado Pago QR como alternativa, si el club lo usa y está conectado.
+- Botón **Registrar venta e ingresar**. Flujo mínimo: elegir el tipo (ya viene marcado el primero disponible), la cantidad y registrar.
+- Confirmación con las entradas en pantalla, listas para escanear.
+
+El medio por defecto y los medios permitidos los devuelve el backend (`GET /api/admin/puerta/evento/:id` → `medios`, `por_defecto`): no están fijos en el código del frontend. Las validaciones de stock, capacidad, ventana de venta, agotados y límites son las de siempre (`validarCompra` + `ejecutarVenta`).
+
+### Auditoría
+
+`auditoria_eventos` (`accion = 'venta_puerta'`) registra usuario, fecha y hora, evento, cantidad, importe, método, observaciones, **rol, IP y dispositivo** (user agent).
+
+### API
+
+```http
+GET  /api/admin/puerta/eventos       eventos cobrables (admin y cobrador)
+GET  /api/admin/puerta/evento/:id    tipos vendibles + { medios, por_defecto, solo_efectivo }
+POST /api/admin/puerta/cobro         (como antes; el medio debe estar permitido → si no, 403)
+GET  /api/admin/puerta/cobro/:id     (como antes)
+POST /api/porteros                   { nombre, apellido?, rol?: 'portero' | 'cobrador' }
+PUT  /api/porteros/:id               { …, rol? }   cambio de función
+PUT  /api/tenants/mio                { boleteria_solo_efectivo: true | false }
+```
+
+### Pruebas (5 nuevas, 36 en total)
+
+- **Alta:** el cobrador se da de alta como personal de puerta y su sesión trae sólo los permisos de boletería. Una función inválida → 400.
+- **Cobro:** cobra en efectivo por defecto, con el mismo stock; la venta queda a su nombre y la auditoría guarda rol, IP y dispositivo. Para el admin, el medio por defecto sigue siendo Mercado Pago.
+- **Accesos:** 403 en 14 rutas del panel (ingresos, estadísticas, eventos, correos, ventas, personal, vendedores, links, Mi complejo, historial, integraciones) y en la Portería. Un portero no entra a la boletería.
+- **«Sólo efectivo»:** Mercado Pago desaparece de los medios para el cobrador y para el admin, y el servidor lo rechaza.
+- **Desactivación y cambio de función:**
+  - desactivado → 403 con el mismo JWT y login rechazado;
+  - cambiado a portero → sin boletería y con acceso a la Portería.
+- **Navegador** (Edge, 1280 / 820 / 390 px):
+  - el login real lleva a la terminal;
+  - el menú tiene sólo «Cobro en boletería» y «Salir»;
+  - efectivo viene preseleccionado y la venta se registra con 1 click;
+  - 8 URLs escritas a mano vuelven a la boletería;
+  - con «sólo efectivo» desaparece el selector;
+  - en el panel del admin, el personal muestra su función y Mi complejo tiene el ajuste;
+  - sin scroll horizontal.

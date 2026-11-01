@@ -81,11 +81,16 @@ function TarjetaQr({ titulo, subtitulo, url, evento, tipo, grande = false }) {
 }
 
 /** Cobro asistido: formulario → QR de pago (esperando) → aprobado con las entradas. */
-function CobroAsistido({ evento, tipos, mercadopago }) {
+/**
+ * Formulario y estados del cobro. medios / porDefecto los decide el backend (GET /admin/puerta/evento/:id):
+ * permisos del rol, configuración «sólo efectivo» del club y si Mercado Pago está conectado. terminal = la
+ * pantalla del cobrador (tipografía y botones más grandes, pensados para caja rápida).
+ */
+export function CobroAsistido({ evento, tipos, medios, porDefecto, terminal = false }) {
   const vendibles = tipos;
-  const [form, setForm] = useState({ id_tipo: vendibles[0]?.id_tipo || '', cantidad: 1, nombre: '', telefono: '', observaciones: '' });
-  // Sin Mercado Pago conectado, la boletería cobra en efectivo
-  const [metodo, setMetodo] = useState(mercadopago ? 'mercadopago' : 'efectivo');
+  const primerDisponible = vendibles.find((t) => t.disponible !== false)?.id_tipo || '';
+  const [form, setForm] = useState({ id_tipo: primerDisponible, cantidad: 1, nombre: '', telefono: '', observaciones: '' });
+  const [metodo, setMetodo] = useState(porDefecto || medios[0]);
   const [clave, setClave] = useState(nuevaClave);
   const [conDatos, setConDatos] = useState(false);
   const [telefonoOk, setTelefonoOk] = useState(null);
@@ -95,7 +100,7 @@ function CobroAsistido({ evento, tipos, mercadopago }) {
   const [enviando, setEnviando] = useState(false);
   const temporizador = useRef(null);
 
-  useEffect(() => { setForm((f) => ({ ...f, id_tipo: vendibles[0]?.id_tipo || '' })); }, [evento.id_evento]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setForm((f) => ({ ...f, id_tipo: primerDisponible })); }, [evento.id_evento]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Consulta el estado cada 2 s mientras el cobro está pendiente (se corta al aprobarse o al cerrar)
   useEffect(() => {
@@ -206,15 +211,21 @@ function CobroAsistido({ evento, tipos, mercadopago }) {
   return (
     <form onSubmit={generar} className="space-y-4" data-testid="cobro-form">
       <Alerta onClose={() => setError('')}>{error}</Alerta>
-      <fieldset className="grid gap-2 sm:grid-cols-2">
+      <fieldset className={`grid gap-2 ${terminal ? 'sm:grid-cols-2 lg:grid-cols-3' : 'sm:grid-cols-2'}`} data-testid="tipos-cobro">
         <legend className="label">Tipo de entrada</legend>
-        {vendibles.map((t) => (
-          <label key={t.id_tipo} className={`flex min-h-14 cursor-pointer items-center justify-between gap-2 rounded-xl px-3 py-2 ring-1 ${Number(form.id_tipo) === t.id_tipo ? 'bg-indigo-50 ring-2 ring-indigo-500 dark:bg-indigo-500/10' : 'ring-zinc-900/10 dark:ring-white/10'}`}>
-            <input type="radio" name="cobro-tipo" className="sr-only" checked={Number(form.id_tipo) === t.id_tipo} onChange={() => setForm({ ...form, id_tipo: t.id_tipo, cantidad: 1 })} />
-            <span className="truncate font-medium">{t.nombre}</span>
-            <span className="shrink-0 tabular-nums">{moneda(t.precio)}</span>
-          </label>
-        ))}
+        {vendibles.map((t) => {
+          const agotada = t.disponible === false;
+          return (
+            <label key={t.id_tipo} className={`flex items-center justify-between gap-2 rounded-xl px-3 py-2 ring-1 transition-[box-shadow,background-color] duration-150 ${terminal ? 'min-h-20 text-lg' : 'min-h-14'} ${agotada ? 'cursor-not-allowed opacity-50 ring-zinc-900/10 dark:ring-white/10' : Number(form.id_tipo) === t.id_tipo ? 'cursor-pointer bg-indigo-50 ring-2 ring-indigo-500 dark:bg-indigo-500/10' : 'cursor-pointer ring-zinc-900/10 dark:ring-white/10'}`}>
+              <input type="radio" name="cobro-tipo" className="sr-only" checked={Number(form.id_tipo) === t.id_tipo} disabled={agotada} onChange={() => setForm({ ...form, id_tipo: t.id_tipo, cantidad: 1 })} />
+              <span className="min-w-0">
+                <span className="block truncate font-medium">{t.nombre}</span>
+                {(agotada || t.quedan) && <span className="block text-xs text-zinc-500 dark:text-zinc-400">{agotada ? 'Agotada' : `Quedan ${t.quedan}`}</span>}
+              </span>
+              <span className="shrink-0 font-semibold tabular-nums">{moneda(t.precio)}</span>
+            </label>
+          );
+        })}
       </fieldset>
       <div className="flex items-center justify-between gap-3">
         <span className="label mb-0!">Cantidad</span>
@@ -226,20 +237,24 @@ function CobroAsistido({ evento, tipos, mercadopago }) {
             className="grid h-11 w-11 place-items-center rounded-full bg-indigo-600 text-white active:scale-[0.92]"><Plus size={18} weight="bold" aria-hidden /></button>
         </span>
       </div>
-      {/* Método de pago */}
-      <fieldset className="grid grid-cols-2 gap-2" data-testid="metodo-pago">
-        <legend className="label">Método de pago</legend>
-        {[['mercadopago', 'Mercado Pago QR', QrCode, 'El cliente paga desde su celular'], ['efectivo', 'Efectivo', Money, 'Cobrás en mano y entra al instante']].map(([valor, texto, Icono, ayuda]) => {
-          const deshabilitado = valor === 'mercadopago' && !mercadopago;
-          return (
-            <label key={valor} className={`flex min-h-16 flex-col justify-center gap-0.5 rounded-xl px-3 py-2 ring-1 transition-[box-shadow,background-color] duration-150 ${deshabilitado ? 'cursor-not-allowed opacity-50 ring-zinc-900/10 dark:ring-white/10' : metodo === valor ? 'cursor-pointer bg-indigo-50 ring-2 ring-indigo-500 dark:bg-indigo-500/10' : 'cursor-pointer ring-zinc-900/10 dark:ring-white/10'}`}>
-              <input type="radio" name="metodo-pago" className="sr-only" value={valor} checked={metodo === valor} disabled={deshabilitado} onChange={() => setMetodo(valor)} />
-              <span className="flex items-center gap-1.5 font-semibold"><Icono size={18} weight="duotone" aria-hidden /> {texto}</span>
-              <span className="text-xs text-zinc-500 dark:text-zinc-400">{deshabilitado ? 'Mercado Pago no está conectado' : ayuda}</span>
-            </label>
-          );
-        })}
-      </fieldset>
+      {/* Método de pago: sólo los permitidos (si hay uno solo, no hay nada que elegir) */}
+      {medios.length > 1 ? (
+        <fieldset className="grid grid-cols-2 gap-2" data-testid="metodo-pago">
+          <legend className="label">Método de pago</legend>
+          {[['efectivo', 'Efectivo', Money, 'Cobrás en mano y entra al instante'], ['mercadopago', 'Mercado Pago QR', QrCode, 'El cliente paga desde su celular']]
+            .filter(([valor]) => medios.includes(valor))
+            .sort(([a]) => (a === porDefecto ? -1 : 1))
+            .map(([valor, texto, Icono, ayuda]) => (
+              <label key={valor} className={`flex min-h-16 cursor-pointer flex-col justify-center gap-0.5 rounded-xl px-3 py-2 ring-1 transition-[box-shadow,background-color] duration-150 ${metodo === valor ? 'bg-indigo-50 ring-2 ring-indigo-500 dark:bg-indigo-500/10' : 'ring-zinc-900/10 dark:ring-white/10'}`}>
+                <input type="radio" name="metodo-pago" className="sr-only" value={valor} checked={metodo === valor} onChange={() => setMetodo(valor)} />
+                <span className="flex items-center gap-1.5 font-semibold"><Icono size={18} weight="duotone" aria-hidden /> {texto}</span>
+                <span className="text-xs text-zinc-500 dark:text-zinc-400">{ayuda}</span>
+              </label>
+            ))}
+        </fieldset>
+      ) : (
+        <p className="flex items-center gap-1.5 text-sm font-medium text-emerald-700 dark:text-emerald-400" data-testid="metodo-unico"><Money size={18} weight="duotone" aria-hidden /> Cobro en efectivo</p>
+      )}
       <label className="flex items-center gap-2 text-sm">
         <input type="checkbox" checked={conDatos} onChange={(e) => setConDatos(e.target.checked)} /> Cargar datos del cliente (opcional: recibe la entrada por WhatsApp y correo)
       </label>
@@ -269,10 +284,57 @@ function CobroAsistido({ evento, tipos, mercadopago }) {
   );
 }
 
+/**
+ * Terminal de cobro (rol cobrador): una sola pantalla, sin panel ni estadísticas. Elegir evento (si hay más
+ * de uno), tipo, cantidad y registrar. Efectivo preseleccionado; Mercado Pago como alternativa si el club lo usa.
+ */
+export function TerminalCobro() {
+  const [eventos, setEventos] = useState(null);
+  const [idEvento, setIdEvento] = useState('');
+  const [datos, setDatos] = useState(null);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    adminApi.eventosBoleteria()
+      .then((evs) => { setEventos(evs); setIdEvento(String(evs[0]?.id_evento || '')); })
+      .catch((e) => setError(mensajeError(e)));
+  }, []);
+  useEffect(() => {
+    setDatos(null);
+    if (idEvento) adminApi.eventoBoleteria(idEvento).then(setDatos).catch((e) => setError(mensajeError(e)));
+  }, [idEvento]);
+
+  if (error && !eventos) return <Alerta>{error}</Alerta>;
+  if (!eventos) return <Skeleton className="mx-auto h-96 max-w-3xl" />;
+  if (!eventos.length) return <Vacio icono={Money} titulo="No hay eventos para cobrar">Cuando haya un evento a la venta, vas a poder cobrar entradas acá.</Vacio>;
+
+  return (
+    <div className="mx-auto max-w-3xl space-y-4" data-testid="terminal-cobro">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <h1 className="text-3xl font-semibold tracking-tight">Cobro en boletería</h1>
+        {eventos.length > 1 ? (
+          <select aria-label="Evento" className="input sm:w-auto!" value={idEvento} onChange={(e) => setIdEvento(e.target.value)}>
+            {eventos.map((e) => <option key={e.id_evento} value={e.id_evento}>{e.nombre} · {fecha(e.fecha)}</option>)}
+          </select>
+        ) : (
+          <p className="text-sm text-zinc-500 dark:text-zinc-400">{eventos[0].nombre} · {fecha(eventos[0].fecha)}</p>
+        )}
+      </div>
+      <Alerta onClose={() => setError('')}>{error}</Alerta>
+      <div className="card p-5! sm:p-6!">
+        {!datos ? <Skeleton className="h-80" /> : datos.evento.tiene_seating
+          ? <Alerta tipo="info">Este evento tiene asientos numerados: no se cobra desde la boletería rápida.</Alerta>
+          : <CobroAsistido key={datos.evento.id_evento} terminal evento={datos.evento} tipos={datos.tipos} medios={datos.medios} porDefecto={datos.por_defecto} />}
+      </div>
+    </div>
+  );
+}
+
 export default function VentaPuerta() {
   const [eventos, setEventos] = useState(null);
   const [idEvento, setIdEvento] = useState('');
   const [qrs, setQrs] = useState(null);
+  const [boleteria, setBoleteria] = useState(null);
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -282,7 +344,11 @@ export default function VentaPuerta() {
   }, []);
   useEffect(() => {
     setQrs(null);
-    if (idEvento) adminApi.qrCompra(idEvento).then(setQrs).catch((e) => setError(mensajeError(e)));
+    setBoleteria(null);
+    if (idEvento) {
+      adminApi.qrCompra(idEvento).then(setQrs).catch((e) => setError(mensajeError(e)));
+      adminApi.eventoBoleteria(idEvento).then(setBoleteria).catch((e) => setError(mensajeError(e)));
+    }
   }, [idEvento]);
 
   if (error && !eventos) return <Alerta>{error}</Alerta>;
@@ -324,7 +390,7 @@ export default function VentaPuerta() {
                 <h2 id="titulo-cobro" className="text-lg font-semibold">Cobro en boletería</h2>
                 <p className="text-sm text-zinc-500 dark:text-zinc-400">Con Mercado Pago, el cliente escanea el QR y se confirma solo. En efectivo, la venta queda registrada al instante.</p>
               </div>
-              <CobroAsistido key={qrs.evento.id_evento} evento={qrs.evento} tipos={qrs.por_tipo} mercadopago={qrs.mercadopago_disponible} />
+              {boleteria ? <CobroAsistido key={boleteria.evento.id_evento} evento={boleteria.evento} tipos={boleteria.tipos} medios={boleteria.medios} porDefecto={boleteria.por_defecto} /> : <Skeleton className="h-64" />}
             </div>
           </section>
         </div>

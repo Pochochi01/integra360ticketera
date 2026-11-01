@@ -5,7 +5,7 @@ import { mensajeError } from '../api/client';
 import { Alerta } from '../components/ui';
 import AuthLayout from '../components/AuthLayout';
 
-const DESTINO_POR_ROL = { vendedor: '/vendedor', admin: '/admin/eventos', superadmin: '/super/tenants', portero: '/porteria' };
+const DESTINO_POR_ROL = { vendedor: '/vendedor', admin: '/admin/eventos', superadmin: '/super/tenants', portero: '/porteria', cobrador: '/admin/porteros/venta' };
 
 export default function Login() {
   const { login } = useAuth();

@@ -6,7 +6,7 @@ const pool = require('../config/db');
  */
 const SELECT = `
   SELECT po.id_portero, po.id_tenant, po.id_usuario, po.usuario, po.estado, po.creado_en,
-         u.nombre, u.apellido,
+         u.nombre, u.apellido, u.rol,
          (SELECT COUNT(*) FROM accesos ac WHERE ac.id_validador = po.id_usuario) AS lecturas,
          (SELECT COUNT(*) FROM accesos ac WHERE ac.id_validador = po.id_usuario AND ac.resultado = 'valido') AS ingresos,
          (SELECT MAX(ac.fecha) FROM accesos ac WHERE ac.id_validador = po.id_usuario) AS ultima_lectura

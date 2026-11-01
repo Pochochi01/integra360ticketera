@@ -5,6 +5,7 @@ const Vendedor = require('../models/Vendedor');
 const Portero = require('../models/Portero');
 const Tenant = require('../models/Tenant');
 const { normalizarWhatsapp } = require('../utils/whatsapp');
+const { permisosDe } = require('../config/permisos');
 const { AppError, asyncHandler } = require('../utils/errors');
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -64,7 +65,7 @@ exports.login = asyncHandler(async (req, res) => {
   // El complejo del personal sale de las tablas de pertenencia (administradores / vendedores)
   const usuario = await Usuario.findById(u.id_usuario);
   const extra = {};
-  if (['admin', 'vendedor', 'portero'].includes(usuario.rol)) {
+  if (['admin', 'vendedor', 'portero', 'cobrador'].includes(usuario.rol)) {
     if (!usuario.id_tenant) throw new AppError(403, 'El usuario no está asignado a ningún complejo');
     const tenant = await Tenant.findById(usuario.id_tenant);
     if (tenant?.estado !== 'activo') throw new AppError(403, 'El complejo está suspendido');
@@ -74,18 +75,18 @@ exports.login = asyncHandler(async (req, res) => {
     if (!vendedor || vendedor.estado !== 'activo') throw new AppError(403, 'Su usuario de vendedor está inactivo');
     extra.id_vendedor = vendedor.id_vendedor;
   }
-  if (usuario.rol === 'portero') {
+  if (usuario.rol === 'portero' || usuario.rol === 'cobrador') {
     const portero = await Portero.findByUsuario(u.id_usuario);
-    if (!portero || portero.estado !== 'activo') throw new AppError(403, 'Su usuario de portero está desactivado');
+    if (!portero || portero.estado !== 'activo') throw new AppError(403, `Su usuario de ${usuario.rol} está desactivado`);
     extra.id_portero = portero.id_portero;
   }
-  res.json({ token: firmarToken(usuario, extra), usuario });
+  res.json({ token: firmarToken(usuario, extra), usuario: { ...usuario, permisos: permisosDe(usuario.rol) } });
 });
 
 exports.me = asyncHandler(async (req, res) => {
   const usuario = await Usuario.findById(req.usuario.id_usuario);
   if (!usuario) throw new AppError(404, 'Usuario no encontrado');
-  res.json(usuario);
+  res.json({ ...usuario, permisos: permisosDe(usuario.rol) });
 });
 
 /** PUT /auth/me — el usuario actualiza nombre, WhatsApp o contraseña. */

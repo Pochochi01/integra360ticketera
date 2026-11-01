@@ -23,10 +23,19 @@ const porteroDelTenant = async (id, req) => asegurarTenant(await Portero.findByI
 
 exports.listar = asyncHandler(async (req, res) => res.json(await Portero.findByTenant(req.tenant.id_tenant)));
 
-/** POST /porteros { nombre, apellido? } → { portero, credenciales: { usuario, password } } */
+/** Funciones del personal de puerta: escanear en la Portería o cobrar en la boletería. */
+const ROLES_PUERTA = ['portero', 'cobrador'];
+const rolPuerta = (rol) => {
+  if (rol === undefined) return 'portero';
+  if (!ROLES_PUERTA.includes(rol)) throw new AppError(400, 'Función inválida (portero | cobrador)');
+  return rol;
+};
+
+/** POST /porteros { nombre, apellido?, rol?: 'portero' | 'cobrador' } → { portero, credenciales: { usuario, password } } */
 exports.crear = asyncHandler(async (req, res) => {
   const nombre = texto(req.body.nombre, 'nombre');
   const apellido = texto(req.body.apellido, 'apellido', { obligatorio: false });
+  const rol = rolPuerta(req.body.rol);
   const password = generarPassword();
   const hash = await bcrypt.hash(password, 10);
 
@@ -36,7 +45,7 @@ exports.crear = asyncHandler(async (req, res) => {
       const id = await pool.withTransaction(async (conn) => {
         const base = generarUsuario(req.tenant.slug, nombre, apellido);
         const usuario = generarUsuario(req.tenant.slug, nombre, apellido, await Portero.usuariosConPrefijo(base, conn));
-        const idUsuario = await Usuario.create({ nombre, apellido, email: null, password_hash: hash, rol: 'portero' }, conn);
+        const idUsuario = await Usuario.create({ nombre, apellido, email: null, password_hash: hash, rol }, conn);
         return Portero.create({ id_tenant: req.tenant.id_tenant, id_usuario: idUsuario, usuario }, conn);
       });
       const portero = await Portero.findById(id);
@@ -54,10 +63,13 @@ exports.actualizar = asyncHandler(async (req, res) => {
   if (req.body.nombre !== undefined) cambios.nombre = texto(req.body.nombre, 'nombre');
   if (req.body.apellido !== undefined) cambios.apellido = texto(req.body.apellido, 'apellido', { obligatorio: false });
   if (req.body.estado !== undefined && !['activo', 'inactivo'].includes(req.body.estado)) throw new AppError(400, 'Estado inválido');
+  const rol = req.body.rol !== undefined ? rolPuerta(req.body.rol) : null;
 
   await pool.withTransaction(async (conn) => {
     if (Object.keys(cambios).length) await Usuario.update(p.id_usuario, cambios, conn);
     if (req.body.estado) await Portero.setEstado(p.id_portero, req.body.estado, conn);
+    // Cambio de función (portero ↔ cobrador): rige desde su próximo pedido (el rol se verifica en cada uno)
+    if (rol) await conn.query('UPDATE usuarios SET rol = ? WHERE id_usuario = ?', [rol, p.id_usuario]);
   });
   res.json(await Portero.findById(p.id_portero));
 });

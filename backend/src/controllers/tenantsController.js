@@ -92,9 +92,10 @@ exports.miTenant = asyncHandler(async (req, res) => res.json(req.tenant));
 
 /** El admin edita datos de contacto y configuración de su complejo (no el slug ni el estado). */
 exports.actualizarMiTenant = asyncHandler(async (req, res) => {
-  const { nombre, email_contacto, telefono, direccion, config, efectivo_habilitado } = req.body;
+  const { nombre, email_contacto, telefono, direccion, config, efectivo_habilitado, boleteria_solo_efectivo } = req.body;
   validarTenant({ nombre }, true);
   if (efectivo_habilitado !== undefined && typeof efectivo_habilitado !== 'boolean') throw new AppError(400, 'efectivo_habilitado debe ser true o false');
+  if (boleteria_solo_efectivo !== undefined && typeof boleteria_solo_efectivo !== 'boolean') throw new AppError(400, 'boleteria_solo_efectivo debe ser true o false');
   res.json(
     await Tenant.update(req.tenant.id_tenant, {
       nombre,
@@ -104,6 +105,7 @@ exports.actualizarMiTenant = asyncHandler(async (req, res) => {
       config: config ? validarConfig(limpiarConfig(config)) : undefined,
       // Permite que los vendedores generen links de pago en efectivo
       efectivo_habilitado: efectivo_habilitado === undefined ? undefined : efectivo_habilitado ? 1 : 0,
+      boleteria_solo_efectivo: boleteria_solo_efectivo === undefined ? undefined : boleteria_solo_efectivo ? 1 : 0,
     })
   );
 });

@@ -147,6 +147,9 @@ export const adminApi = {
   // Venta en portería: URLs de los QR de compra y cobro asistido en boletería
   qrCompra: (id) => api.get(`/admin/event/${id}/qr-compra`).then(datos),
   crearCobroPuerta: (d) => api.post('/admin/puerta/cobro', d).then(datos),
+  // Boletería (admin y cobrador): eventos cobrables y tipos + medios permitidos de un evento
+  eventosBoleteria: () => api.get('/admin/puerta/eventos').then(datos),
+  eventoBoleteria: (id) => api.get(`/admin/puerta/evento/${id}`).then(datos),
   estadoCobroPuerta: (idVenta) => api.get(`/admin/puerta/cobro/${idVenta}`).then(datos),
   actualizarEvento: (id, d) => api.post(`/admin/event/${id}/update`, d).then(datos),
   // Venta directa con MercadoPago desde el panel: mismo checkout único que el resto de los canales

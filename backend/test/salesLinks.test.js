@@ -1071,3 +1071,106 @@ test('mercadopago en boletería: sigue igual y ahora registra quién vendió; la
   assert.equal(v.observaciones, 'Mesa 4');
 });
 
+// ── Rol COBRADOR de portería ────────────────────────────────────────────────────────────────────────
+
+/** El admin da de alta a un cobrador (personal de puerta) y este inicia sesión con su usuario generado. */
+const altaCobrador = async (nombre = 'Lucía') => {
+  const alta = await api('POST', '/porteros', { token: datos[1].token, body: { nombre, apellido: 'Caja', rol: 'cobrador' } });
+  assert.equal(alta.status, 201, JSON.stringify(alta.body));
+  const login = await api('POST', '/auth/login', { body: { usuario: alta.body.credenciales.usuario, password: alta.body.credenciales.password } });
+  assert.equal(login.status, 200, JSON.stringify(login.body));
+  return { ...alta.body, token: login.body.token, usuario: login.body.usuario };
+};
+
+test('cobrador: se da de alta como personal de puerta y su sesión trae sólo los permisos de boletería', async () => {
+  const c = await altaCobrador();
+  assert.equal(c.portero.rol, 'cobrador');
+  assert.equal(c.usuario.rol, 'cobrador');
+  assert.deepEqual([...c.usuario.permisos].sort(), ['acceso_boleteria', 'venta_efectivo', 'venta_qr']);
+  assert.deepEqual((await api('GET', '/auth/me', { token: c.token })).body.permisos.sort(), ['acceso_boleteria', 'venta_efectivo', 'venta_qr']);
+  assert.equal((await api('POST', '/porteros', { token: datos[1].token, body: { nombre: 'X', rol: 'admin' } })).status, 400, 'sólo portero | cobrador');
+});
+
+test('cobrador: cobra en la boletería (efectivo por defecto) y queda auditado con usuario, IP y dispositivo', async () => {
+  await asegurarStock(30);
+  const c = await altaCobrador('Mateo');
+  const eventos = await api('GET', '/admin/puerta/eventos', { token: c.token });
+  assert.equal(eventos.status, 200);
+  assert.ok(eventos.body.some((e) => e.id_evento === datos[1].id_evento));
+  const ev = await api('GET', `/admin/puerta/evento/${datos[1].id_evento}`, { token: c.token });
+  assert.equal(ev.status, 200);
+  assert.equal(ev.body.por_defecto, 'efectivo', 'caja rápida: efectivo preseleccionado');
+  assert.deepEqual(ev.body.medios.sort(), ['efectivo', 'mercadopago']);
+  assert.ok(ev.body.tipos.some((t) => t.id_tipo === datos[1].id_tipo));
+  assert.equal((await api('GET', `/admin/puerta/evento/${datos[1].id_evento}`, { token: datos[1].token })).body.por_defecto, 'mercadopago', 'el admin sigue igual');
+
+  const stockAntes = await stockTipo(datos[1].id_tipo);
+  const r = await api('POST', '/admin/puerta/cobro', { token: c.token, body: { id_evento: datos[1].id_evento, id_tipo: datos[1].id_tipo, cantidad: 2, metodo_pago: 'efectivo', clave: randomUUID() } });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  assert.equal(r.body.mensaje, 'Venta registrada en efectivo correctamente');
+  assert.equal(await stockTipo(datos[1].id_tipo), stockAntes - 2, 'mismas validaciones y stock que siempre');
+  const [[v]] = await pool.query('SELECT id_usuario_staff FROM ventas WHERE id_venta = ?', [r.body.id_venta]);
+  assert.equal(v.id_usuario_staff, c.usuario.id_usuario, 'la venta queda a nombre del cobrador');
+  const [[aud]] = await pool.query("SELECT id_usuario, detalle FROM auditoria_eventos WHERE accion = 'venta_puerta' ORDER BY id DESC LIMIT 1");
+  const det = typeof aud.detalle === 'string' ? JSON.parse(aud.detalle) : aud.detalle;
+  assert.equal(aud.id_usuario, c.usuario.id_usuario);
+  assert.equal(det.rol, 'cobrador');
+  assert.ok(det.ip, 'IP registrada');
+  assert.ok(det.dispositivo, 'dispositivo registrado');
+  assert.equal((await api('GET', `/admin/puerta/cobro/${r.body.id_venta}`, { token: c.token })).body.estado_pago, 'approved');
+});
+
+test('cobrador: 403 en todo lo que no sea la boletería (panel, reportes, eventos, personal, Portería)', async () => {
+  const c = await altaCobrador('Sofía');
+  const id = datos[1].id_evento;
+  const prohibidas = [
+    ['GET', `/admin/event/${id}/ingresos`], ['GET', `/admin/event/${id}/stats`], ['GET', `/admin/event/${id}`],
+    ['POST', `/admin/event/${id}/update`], ['GET', `/admin/event/${id}/qr-compra`], ['GET', `/admin/event/${id}/correos`],
+    ['GET', '/ventas'], ['GET', '/eventos/admin/todos'], ['GET', '/porteros'], ['GET', '/vendedores'], ['GET', '/ventas/link'],
+    ['PUT', '/tenants/mio'], ['GET', '/acceso/historial'], ['GET', '/integraciones/mercadopago'],
+  ];
+  for (const [metodo, ruta] of prohibidas) {
+    const r = await api(metodo, ruta, { token: c.token, body: metodo === 'GET' ? undefined : {} });
+    assert.equal(r.status, 403, `${metodo} ${ruta} → ${r.status}`);
+  }
+  // Tampoco escanea: la Portería es exclusiva de los porteros
+  assert.equal((await api('POST', '/porteria/validarQR', { token: c.token, body: { codigo: 'TK-X' } })).status, 403);
+  // Y un portero no cobra
+  assert.equal((await api('GET', '/admin/puerta/eventos', { token: await portero() })).status, 403);
+});
+
+test('boletería «sólo efectivo» (configuración del club): oculta y rechaza Mercado Pago para todos', async () => {
+  const c = await altaCobrador('Bruno');
+  const cfg = (v) => api('PUT', '/tenants/mio', { token: datos[1].token, body: { boleteria_solo_efectivo: v } });
+  assert.equal((await cfg(true)).status, 200);
+  try {
+    for (const token of [c.token, datos[1].token]) {
+      const ev = (await api('GET', `/admin/puerta/evento/${datos[1].id_evento}`, { token })).body;
+      assert.deepEqual(ev.medios, ['efectivo']);
+      assert.equal(ev.por_defecto, 'efectivo');
+      assert.equal(ev.solo_efectivo, true);
+      const mp = await api('POST', '/admin/puerta/cobro', { token, body: { id_evento: datos[1].id_evento, id_tipo: datos[1].id_tipo, metodo_pago: 'mercadopago', clave: randomUUID() } });
+      assert.equal(mp.status, 403);
+      assert.match(mp.body.error, /sólo en efectivo/);
+    }
+  } finally {
+    assert.equal((await cfg(false)).status, 200);
+  }
+  assert.deepEqual((await api('GET', `/admin/puerta/evento/${datos[1].id_evento}`, { token: c.token })).body.medios.sort(), ['efectivo', 'mercadopago']);
+});
+
+test('cobrador: desactivarlo lo deja afuera al instante; cambiarle la función a portero le quita la boletería', async () => {
+  const c = await altaCobrador('Elena');
+  const ruta = '/admin/puerta/eventos';
+  assert.equal((await api('GET', ruta, { token: c.token })).status, 200);
+  await api('PUT', `/porteros/${c.portero.id_portero}`, { token: datos[1].token, body: { estado: 'inactivo' } });
+  assert.equal((await api('GET', ruta, { token: c.token })).status, 403, 'con el mismo JWT');
+  assert.equal((await api('POST', '/auth/login', { body: { usuario: c.credenciales.usuario, password: c.credenciales.password } })).status, 403);
+  await api('PUT', `/porteros/${c.portero.id_portero}`, { token: datos[1].token, body: { estado: 'activo', rol: 'portero' } });
+  const login = await api('POST', '/auth/login', { body: { usuario: c.credenciales.usuario, password: c.credenciales.password } });
+  assert.equal(login.body.usuario.rol, 'portero');
+  assert.deepEqual(login.body.usuario.permisos, []);
+  assert.equal((await api('GET', ruta, { token: login.body.token })).status, 403);
+  assert.equal((await api('GET', '/porteria/eventos', { token: login.body.token })).status, 200, 'ahora es portero');
+});
+

@@ -1,5 +1,5 @@
 const { Router } = require('express');
-const { staff } = require('../middlewares/tenant');
+const { staff, staffBoleteria } = require('../middlewares/tenant');
 const { estadisticasEvento } = require('../services/estadisticasEvento');
 const { ingresosEvento } = require('../services/ingresosEvento');
 const puerta = require('../services/ventaPuerta');
@@ -97,6 +97,12 @@ r.put('/event/:id/update', admin, actualizar);
 /** GET /event/:id/qr-compra — URLs de compra (general y por tipo) para generar los QR de la puerta. */
 r.get('/event/:id/qr-compra', admin, asyncHandler(async (req, res) => res.json(await puerta.qrsDeCompra(req.params.id, req.tenant.id_tenant))));
 
+// Boletería: admin y cobradores (staffBoleteria). El cobrador no tiene acceso a ninguna otra ruta del panel.
+/** GET /puerta/eventos — eventos que se pueden cobrar ahora. */
+r.get('/puerta/eventos', staffBoleteria, asyncHandler(async (req, res) => res.json(await puerta.eventosBoleteria(req.tenant.id_tenant))));
+/** GET /puerta/evento/:id — tipos vendibles y medios de cobro permitidos (por defecto efectivo para el cobrador). */
+r.get('/puerta/evento/:id', staffBoleteria, asyncHandler(async (req, res) => res.json(await puerta.datosBoleteria(req.params.id, req.tenant, req.usuario.rol))));
+
 /**
  * POST /puerta/cobro — boletería:
  *   { id_evento, id_tipo, cantidad, metodo_pago: 'mercadopago' | 'efectivo', comprador?: { nombre, telefono },
@@ -105,7 +111,7 @@ r.get('/event/:id/qr-compra', admin, asyncHandler(async (req, res) => res.json(a
  *   efectivo    → 201 { id_venta, estado_pago: 'approved', tickets, mensaje } (venta pagada al instante)
  *   Misma clave otra vez → 200 con la operación ya registrada (no crea otra venta).
  */
-r.post('/puerta/cobro', admin,
+r.post('/puerta/cobro', staffBoleteria,
   (req, _res, next) => {
     const cantidad = Number(req.body.cantidad || 1);
     if (!Number.isInteger(cantidad) || cantidad < 1 || cantidad > 50) return next(new AppError(400, 'La cantidad debe ser un entero entre 1 y 50'));
@@ -116,6 +122,16 @@ r.post('/puerta/cobro', admin,
     req.body.metodo_pago = metodo;
     next();
   },
+  // El medio tiene que estar permitido para este usuario y por la configuración del complejo
+  asyncHandler(async (req, _res, next) => {
+    const { medios } = await puerta.mediosBoleteria(req.tenant, req.usuario.rol);
+    if (!medios.includes(req.body.metodo_pago)) {
+      throw new AppError(403, req.body.metodo_pago === 'mercadopago'
+        ? (req.tenant.boleteria_solo_efectivo ? 'El complejo cobra sólo en efectivo en la boletería' : 'No podés cobrar con Mercado Pago')
+        : 'No podés cobrar en efectivo');
+    }
+    next();
+  }),
   // Idempotencia: si esta operación (clave) ya se registró, se devuelve tal cual sin crear nada
   asyncHandler(async (req, res, next) => {
     const previa = await puerta.operacionPrevia(req.body.clave, req.tenant.id_tenant);
@@ -137,7 +153,7 @@ r.post('/puerta/cobro', admin,
   }));
 
 /** GET /puerta/cobro/:id — estado del cobro (la pantalla de boletería lo consulta cada 2 s). */
-r.get('/puerta/cobro/:id', admin, asyncHandler(async (req, res) => {
+r.get('/puerta/cobro/:id', staffBoleteria, asyncHandler(async (req, res) => {
   res.set('Cache-Control', 'no-store');
   res.json(await puerta.estadoCobro(req.params.id, req.tenant.id_tenant));
 }));

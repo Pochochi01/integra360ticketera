@@ -118,8 +118,46 @@ const auditar = (req) => (conn, idVenta) => conn.query(
     id_venta: idVenta, metodo_pago: req.compra.metodoPago, cantidad: req.compra.cantidadTotal, importe: req.compra.total,
     tipos: req.compra.lineas.map((l) => ({ id_tipo: l.id_tipo, tipo: l.tipo.nombre_tipo, cantidad: l.cantidad })),
     observaciones: req.compra.observaciones,
+    // Quién, desde dónde y con qué dispositivo (la fecha y hora las registra la tabla)
+    rol: req.usuario.rol, ip: req.ip, dispositivo: String(req.headers['user-agent'] || '').slice(0, 200),
   })]
 );
+
+/**
+ * Medios de cobro permitidos en la boletería para este usuario: según sus permisos (config/permisos.js), la
+ * configuración del complejo (tenants.boleteria_solo_efectivo) y si MercadoPago está conectado. Por defecto:
+ * efectivo para el cobrador (caja rápida); MercadoPago para el admin si está disponible.
+ */
+const mediosBoleteria = async (tenant, rol) => {
+  const { tienePermiso } = require('../config/permisos');
+  const cuenta = await MercadoPagoToken.publica(tenant.id_tenant);
+  const medios = [
+    ...(tienePermiso(rol, 'venta_efectivo') ? ['efectivo'] : []),
+    ...(tienePermiso(rol, 'venta_qr') && !tenant.boleteria_solo_efectivo && cuenta?.conectado && cuenta.activo ? ['mercadopago'] : []),
+  ];
+  const porDefecto = rol === 'cobrador' || !medios.includes('mercadopago') ? (medios.includes('efectivo') ? 'efectivo' : medios[0]) : 'mercadopago';
+  return { medios, por_defecto: porDefecto || null, solo_efectivo: Boolean(tenant.boleteria_solo_efectivo) };
+};
+
+/**
+ * Eventos que se pueden cobrar en la boletería: publicados o agotados, desde 12 h antes de empezar. Sin los de
+ * asientos numerados (hay que elegir butaca: no son de caja rápida), así el cajero arranca en uno cobrable.
+ */
+const eventosBoleteria = async (idTenant) => (await pool.query(
+  `SELECT id_evento, nombre, fecha, lugar, estado, tiene_seating FROM eventos
+    WHERE id_tenant = ? AND estado IN ('publicado','agotado') AND NOT tiene_seating AND fecha > NOW() - INTERVAL 12 HOUR ORDER BY fecha`, [idTenant]))[0];
+
+/** Datos de un evento para cobrar: tipos vendibles con precio y disponibilidad, y los medios permitidos. */
+const datosBoleteria = async (idEvento, tenant, rol) => {
+  const evento = await Evento.findById(Number(idEvento));
+  if (!evento || evento.id_tenant !== tenant.id_tenant) throw new AppError(404, 'Evento no encontrado');
+  const tipos = await tiposVendibles(evento.id_evento);
+  return {
+    evento: { id_evento: evento.id_evento, nombre: evento.nombre, fecha: evento.fecha, lugar: evento.lugar, estado: evento.estado, tiene_seating: Boolean(evento.tiene_seating) },
+    tipos: tipos.map((t) => ({ id_tipo: t.id_tipo, nombre: t.nombre_tipo, precio: Number(t.precio), disponible: t.stock_disponible > 0, quedan: t.stock_disponible > 0 && t.stock_disponible <= 20 ? t.stock_disponible : null })),
+    ...(await mediosBoleteria(tenant, rol)),
+  };
+};
 
 /**
  * Respuesta de una operación de boletería ya registrada (reintento con la misma clave): mismo resultado que la
@@ -228,4 +266,4 @@ const estadoCobro = async (idVenta, idTenant) => {
   return { ...base, entrada_url: `${frontend()}/entrada/${venta.token_acceso}`, tickets: tickets.map((t) => ({ id_ticket: t.id_ticket, numero: t.numero, tipo: t.nombre_tipo, url: t.url })) };
 };
 
-module.exports = { datosCompraRapida, qrsDeCompra, crearCobroAsistido, registrarVentaEfectivo, operacionPrevia, estadoCobro, compradorAnonimo, slugTipo, urlCompra };
+module.exports = { datosCompraRapida, qrsDeCompra, crearCobroAsistido, registrarVentaEfectivo, operacionPrevia, estadoCobro, eventosBoleteria, datosBoleteria, mediosBoleteria, compradorAnonimo, slugTipo, urlCompra };

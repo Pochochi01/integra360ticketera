@@ -9,7 +9,7 @@ const { AppError } = require('../utils/errors');
  *  - comprador:  compra, transfiere y ve sus tickets (no pertenece a ningún tenant).
  *  - portero:    personal de puerta de un tenant: sólo escanea entradas en /porteria.
  */
-const ROLES = ['superadmin', 'admin', 'vendedor', 'comprador', 'portero'];
+const ROLES = ['superadmin', 'admin', 'vendedor', 'comprador', 'portero', 'cobrador'];
 
 const decodificar = (req) => {
   const [tipo, token] = (req.headers.authorization || '').split(' ');
@@ -54,4 +54,12 @@ const exigirRol = (...roles) => (req, _res, next) => {
   next();
 };
 
-module.exports = { ROLES, verificarToken, tokenOpcional, requiereRol, exigirRol };
+/** Exige un permiso (config/permisos.js) al rol de la sesión. */
+const requierePermiso = (permiso) => (req, _res, next) => {
+  const { tienePermiso } = require('../config/permisos');
+  if (!req.usuario) return next(new AppError(401, 'Token requerido'));
+  if (!tienePermiso(req.usuario.rol, permiso)) return next(new AppError(403, 'Acceso denegado'));
+  next();
+};
+
+module.exports = { ROLES, verificarToken, tokenOpcional, requiereRol, exigirRol, requierePermiso };

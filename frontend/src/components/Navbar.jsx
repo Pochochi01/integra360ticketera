@@ -28,6 +28,7 @@ const LINKS_POR_ROL = {
     ['/admin/emision', 'Emisión'], ['/admin/porteros', 'Porteros'], ['/admin/integraciones', 'Integraciones'], ['/admin/complejo', 'Mi complejo'],
   ],
   portero: [['/porteria', 'Portería']],
+  cobrador: [['/admin/porteros/venta', 'Cobro en boletería']],
   superadmin: [['/super/tenants', 'Complejos'], ['/super/plataforma', 'Plataforma'], ['/super/usuarios', 'Usuarios']],
 };
 
@@ -98,7 +99,7 @@ export default function Navbar() {
               ))}
             </div>
           )}
-          <button
+          {rol !== 'cobrador' && <button
             type="button"
             onClick={alternar}
             aria-label={modo === 'oscuro' ? 'Cambiar a modo claro' : 'Cambiar a modo oscuro'}
@@ -106,7 +107,7 @@ export default function Navbar() {
             className="grid h-11 w-11 place-items-center self-start rounded-full lg:h-9 lg:w-9 text-zinc-600 ring-1 ring-zinc-900/10 transition-[transform,background-color] duration-150 ease-out hover:bg-zinc-900/5 active:scale-[0.94] lg:ml-1 lg:self-auto dark:text-zinc-300 dark:ring-white/15 dark:hover:bg-white/10"
           >
             {modo === 'oscuro' ? <Sun size={18} weight="bold" aria-hidden /> : <Moon size={18} weight="bold" aria-hidden />}
-          </button>
+          </button>}
           {usuario ? (
             <div className="mt-1 flex items-center justify-between gap-2 border-t border-zinc-900/10 pt-3 lg:mt-0 lg:ml-3 lg:justify-start lg:border-0 lg:pt-0 dark:border-white/10">
               <span className={`truncate text-sm lg:hidden xl:inline ${tema.secundario}`}>{usuario.nombre}</span>

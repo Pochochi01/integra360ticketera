@@ -47,15 +47,17 @@ function MiSuscripcion() {
  * Interruptor: los vendedores pueden (o no) generar links de pago en efectivo.
  * Se guarda al instante (no depende del botón «Guardar cambios» del formulario).
  */
-function PagoEfectivo({ habilitado, onCambio }) {
+/** Interruptor de una opción booleana del complejo (se guarda al tocarlo). */
+function AjusteComplejo({ campo, titulo, children, textoSi, textoNo, habilitado, onCambio }) {
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState('');
+  const idTitulo = `titulo-${campo}`;
   const cambiar = async () => {
     setGuardando(true);
     setError('');
     try {
-      const t = await tenantsApi.actualizarMio({ efectivo_habilitado: !habilitado });
-      onCambio(!!t.efectivo_habilitado);
+      const t = await tenantsApi.actualizarMio({ [campo]: !habilitado });
+      onCambio(!!t[campo]);
     } catch (e) {
       setError(mensajeError(e));
     } finally {
@@ -66,20 +68,17 @@ function PagoEfectivo({ habilitado, onCambio }) {
     <div className="card space-y-3">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h2 id="titulo-efectivo" className="font-semibold">Pago en efectivo para vendedores</h2>
-          <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-            Por defecto los vendedores cobran con MercadoPago. Si lo habilitás, también pueden reservar entradas
-            para pagar en efectivo: quedan pendientes y sólo sirven para ingresar cuando las validás en <b>Ventas</b>.
-          </p>
+          <h2 id={idTitulo} className="font-semibold">{titulo}</h2>
+          <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">{children}</p>
         </div>
         <button
-          type="button" role="switch" aria-checked={habilitado} aria-labelledby="titulo-efectivo" onClick={cambiar} disabled={guardando}
+          type="button" role="switch" aria-checked={habilitado} aria-labelledby={idTitulo} onClick={cambiar} disabled={guardando}
           className={`relative h-7 w-12 shrink-0 rounded-full transition-colors duration-200 disabled:opacity-60 ${habilitado ? 'bg-emerald-600' : 'bg-zinc-300 dark:bg-white/15'}`}
         >
           <span className={`absolute left-0.5 top-0.5 h-6 w-6 rounded-full bg-white shadow transition-transform duration-200 ease-out ${habilitado ? 'translate-x-5' : ''}`} />
         </button>
       </div>
-      <p className="text-sm" data-testid="estado-efectivo">{habilitado ? 'Efectivo habilitado' : 'Efectivo deshabilitado'}</p>
+      <p className="text-sm" data-testid={`estado-${campo}`}>{habilitado ? textoSi : textoNo}</p>
       <Alerta onClose={() => setError('')}>{error}</Alerta>
     </div>
   );
@@ -120,7 +119,16 @@ export default function AdminComplejo() {
     <div className="mx-auto max-w-2xl space-y-4">
     <h1 className="text-3xl font-semibold tracking-tight">Mi complejo</h1>
     <MiSuscripcion />
-    <PagoEfectivo habilitado={!!form.efectivo_habilitado} onCambio={(v) => setForm({ ...form, efectivo_habilitado: v })} />
+    <AjusteComplejo campo="efectivo_habilitado" titulo="Pago en efectivo para vendedores" textoSi="Efectivo habilitado" textoNo="Efectivo deshabilitado"
+      habilitado={!!form.efectivo_habilitado} onCambio={(v) => setForm({ ...form, efectivo_habilitado: v })}>
+      Por defecto los vendedores cobran con MercadoPago. Si lo habilitás, también pueden reservar entradas
+      para pagar en efectivo: quedan pendientes y sólo sirven para ingresar cuando las validás en <b>Ventas</b>.
+    </AjusteComplejo>
+    <AjusteComplejo campo="boleteria_solo_efectivo" titulo="Boletería: sólo efectivo" textoSi="La boletería cobra sólo en efectivo" textoNo="La boletería puede cobrar en efectivo o con QR de MercadoPago"
+      habilitado={!!form.boleteria_solo_efectivo} onCambio={(v) => setForm({ ...form, boleteria_solo_efectivo: v })}>
+      Si lo activás, en <b>Porteros → Venta en puerta</b> (y en la terminal de los cobradores) se oculta el cobro con
+      MercadoPago: sólo se registran ventas en efectivo.
+    </AjusteComplejo>
     <form onSubmit={guardar} className="space-y-4">
       <Alerta onClose={() => setError('')}>{error}</Alerta>
       <Alerta tipo="exito" onClose={() => setAviso('')}>{aviso}</Alerta>
